@@ -32,24 +32,25 @@ MainWindow::MainWindow(QWidget *parent)
     // 写入默认的高清晰度时序图与类图展示用例
     editor->setPlainText(
         "@startuml\n"
-        "skinparam backgroundColor #1e1e24\n"
-        "skinparam usecaseBackgroundColor #6366f1\n"
-        "skinparam usecaseBorderColor #ef4444\n"
-        "skinparam usecaseArrowColor #38bdf8\n"
-        "skinparam actorBorderColor #818cf8\n"
-        "skinparam actorBackgroundColor #818cf8\n"
-        "skinparam objectBorderColor #38bdf8\n"
-        "skinparam classBorderColor #6366f1\n"
-        "skinparam arrowColor #e4e4e7\n"
-        "skinparam classHeaderBackgroundColor #6366f1\n"
-        "skinparam classBackgroundColor #27272a\n"
-        "skinparam classAttributeFontColor #e4e4e7\n"
+        "skinparam backgroundColor #ffffff\n"
+        "skinparam usecaseBackgroundColor #e0e7ff\n"
+        "skinparam usecaseBorderColor #6366f1\n"
+        "skinparam usecaseArrowColor #4f46e5\n"
+        "skinparam actorBorderColor #4f46e5\n"
+        "skinparam actorBackgroundColor #e0e7ff\n"
+        "skinparam objectBorderColor #4f46e5\n"
+        "skinparam objectBackgroundColor #f3f4f6\n"
+        "skinparam classBorderColor #4f46e5\n"
+        "skinparam arrowColor #4f46e5\n"
+        "skinparam classHeaderBackgroundColor #e0e7ff\n"
+        "skinparam classBackgroundColor #ffffff\n"
+        "skinparam classAttributeFontColor #18181b\n"
         "skinparam classAttributeFontSize 12\n"
-        "skinparam classFontColor #e4e4e7\n"
+        "skinparam classFontColor #18181b\n"
         "skinparam classFontSize 14\n"
-        "skinparam noteBackgroundColor #121214\n"
-        "skinparam noteBorderColor #38bdf8\n"
-        "skinparam noteFontColor #a1a1aa\n\n"
+        "skinparam noteBackgroundColor #fef08a\n"
+        "skinparam noteBorderColor #ca8a04\n"
+        "skinparam noteFontColor #713f12\n\n"
         "header PlantUML GraphicsScene Viewer\n"
         "footer Page 1 of 1\n\n"
         "class MainWindow {\n"
@@ -88,7 +89,7 @@ void MainWindow::setupUi()
     
     // 工具栏左侧标题与状态
     QLabel *titleLabel = new QLabel(tr("PlantUML Viewer"), this);
-    titleLabel->setStyleSheet("font-weight: bold; font-size: 11pt; color: #e4e4e7;");
+    titleLabel->setStyleSheet("font-weight: bold; font-size: 11pt; color: #18181b;");
     toolBar->addWidget(titleLabel);
     
     toolBar->addSeparator();
@@ -136,19 +137,19 @@ void MainWindow::setupUi()
 
 void MainWindow::setupStyles()
 {
-    // 精美的现代暗黑极客主题 QSS
+    // 精美的现代浅色（Modern Light Theme）极简设计
     QString qss = R"(
         QMainWindow {
-            background-color: #121214;
+            background-color: #f9fafb;
         }
         QSplitter::handle {
-            background-color: #27272a;
+            background-color: #e5e7eb;
             width: 4px;
         }
         QPlainTextEdit {
-            background-color: #1e1e24;
-            color: #e4e4e7;
-            border: 1px solid #27272a;
+            background-color: #ffffff;
+            color: #18181b;
+            border: 1px solid #e5e7eb;
             border-radius: 8px;
             font-family: 'Consolas', 'Fira Code', 'Courier New', monospace;
             font-size: 13px;
@@ -159,32 +160,35 @@ void MainWindow::setupStyles()
             border: 1px solid #6366f1;
         }
         QGraphicsView {
-            background-color: #121214;
-            border: 1px solid #27272a;
+            background-color: #f3f4f6;
+            border: 1px solid #e5e7eb;
             border-radius: 8px;
         }
         QToolBar {
-            background-color: #1e1e24;
-            border-bottom: 1px solid #27272a;
+            background-color: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
             padding: 8px 16px;
             spacing: 16px;
         }
         QPushButton {
-            background-color: #27272a;
-            color: #e4e4e7;
-            border: 1px solid #3f3f46;
+            background-color: #f4f4f5;
+            color: #27272a;
+            border: 1px solid #e4e4e7;
             border-radius: 6px;
             padding: 6px 16px;
             font-weight: bold;
             font-size: 12px;
         }
         QPushButton:hover {
-            background-color: #3f3f46;
+            background-color: #e4e4e7;
             border-color: #6366f1;
         }
         QPushButton:pressed {
-            background-color: #1e1e24;
+            background-color: #d4d4d8;
             border-color: #818cf8;
+        }
+        QLabel {
+            color: #71717a;
         }
     )";
     setStyleSheet(qss);
