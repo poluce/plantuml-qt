@@ -2,15 +2,14 @@
 
 #include <QMainWindow>
 #include <QPlainTextEdit>
-#include <QGraphicsScene>
-#include <QTimer>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
 #include <QSplitter>
 #include <QLabel>
 #include <QPushButton>
-#include "plantuml_view.h"
-#include "plantuml_encoder.h"
+#include <QTextBlock>
+#include "graphics/DiagramScene.h"
+#include "graphics/DiagramView.h"
+#include "app/RenderController.h"
+#include "parser/ParseError.h"
 
 class MainWindow : public QMainWindow
 {
@@ -21,34 +20,36 @@ public:
     ~MainWindow() override;
 
 private slots:
-    // 编辑框输入改变响应
+    // 文本输入改变，通报给控制器
     void onTextChanged();
     
-    // 防抖计时器触发
-    void onRenderTimerTriggered();
+    // 控制器编译渲染完毕回调，用于更新状态栏和错误列表
+    void onRenderFinished(const QVector<ParseError> &errors);
     
-    // SVG 网络数据下载完成回调
-    void onNetworkReplyFinished(QNetworkReply *reply);
+    // 拦截右侧画布点击，跳转高亮左侧编辑器源码行
+    void onItemActivated(QString semanticId, SourceLocation location);
     
-    // 重置缩放
+    // 复位缩放 1:1
     void resetView();
+    
+    // 自适应视口，显示整张时序图
+    void fitView();
 
 private:
-    void setupUi();       // 初始化双栏与工具栏布局
-    void setupStyles();   // 注入现代暗黑 QSS 视觉体系
+    void setupUi();       // 构建双栏交互及工具栏
+    void setupStyles();   // 设定高颜值现代浅色 QSS 样式表
 
-    // 界面控件
+    // UI 控件
     QSplitter *splitter;
     QPlainTextEdit *editor;
-    PlantUmlView *graphicsView;
-    QGraphicsScene *graphicsScene;
+    DiagramView *graphicsView;
+    DiagramScene *graphicsScene;
     
     QLabel *statusLabel;
     QPushButton *btnReset;
+    QPushButton *btnFit;
     QPushButton *btnRefresh;
 
-    // 后台组件
-    QTimer *renderTimer;
-    QNetworkAccessManager *networkManager;
-    PlantUmlEncoder *encoder;
+    // 本地控制器
+    RenderController *renderController;
 };

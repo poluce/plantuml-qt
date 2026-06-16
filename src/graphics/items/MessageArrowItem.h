@@ -1,0 +1,26 @@
+#pragma once
+
+#include <QGraphicsItem>
+#include "../../render_model/RenderDocument.h"
+#include "../../render_model/RenderTheme.h"
+
+class MessageArrowItem : public QGraphicsItem
+{
+public:
+    MessageArrowItem(const RenderEdge &edge, const RenderTheme &theme);
+
+    // 图元包围盒，包含连线上方文字的高度
+    QRectF boundingRect() const override;
+
+    // 执行消息线、文字和箭头的绘制
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;
+
+    SourceLocation location() const { return m_edge.location; }
+
+private:
+    // 绘制箭头辅助函数 (支持开口或实心)
+    void drawArrowHead(QPainter *painter, const QPointF &tip, bool pointsRight, bool isSolid);
+
+    RenderEdge m_edge;
+    RenderTheme m_theme;
+};

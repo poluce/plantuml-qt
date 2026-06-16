@@ -2,34 +2,34 @@
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QGraphicsSvgItem>
-#include <QSvgRenderer>
-#include <QNetworkRequest>
-#include <QNetworkReply>
-#include <QByteArray>
+#include <QTextCursor>
+#include <QTextBlock>
 #include <QStyle>
+#include <QApplication>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    // 初始化后台组件
-    encoder = new PlantUmlEncoder(this);
-    networkManager = new QNetworkAccessManager(this);
+    // 1. 初始化图形场景与自定义视图
+    graphicsScene = new DiagramScene(this);
+    graphicsView = new DiagramView(this);
+    graphicsView->setScene(graphicsScene);
     
-    // 初始化 800ms 输入防抖定时器
-    renderTimer = new QTimer(this);
-    renderTimer->setSingleShot(true);
-    renderTimer->setInterval(800);
+    // 2. 初始化本地编译流水线控制器
+    renderController = new RenderController(graphicsScene, this);
     
-    // 连接信号槽
-    connect(renderTimer, &QTimer::timeout, this, &MainWindow::onRenderTimerTriggered);
-    connect(networkManager, &QNetworkAccessManager::finished, this, &MainWindow::onNetworkReplyFinished);
-    
-    // 设置 UI 和 QSS 皮肤
+    // 3. 构建布局界面与 QSS 浅色主题
     setupUi();
     setupStyles();
     
-    // 写入默认的高清晰度时序图与类图展示用例
+    // 4. 连接控制层与视图层的信号槽
+    connect(editor, &QPlainTextEdit::textChanged, this, &MainWindow::onTextChanged);
+    connect(renderController, &RenderController::renderFinished, this, &MainWindow::onRenderFinished);
+    
+    // 拦截右侧点击，自动选中并跳转到左侧对应行
+    connect(graphicsScene, &DiagramScene::itemActivated, this, &MainWindow::onItemActivated);
+    
+    // 5. 填入初始 PlantUML 本地时序图案例 (完全使用中文标签和注释，测试中文字体与本地解析)
     editor->setPlainText(
         "@startuml\n"
         "skinparam backgroundColor #ffffff\n"
@@ -51,26 +51,24 @@ MainWindow::MainWindow(QWidget *parent)
         "skinparam noteBackgroundColor #fef08a\n"
         "skinparam noteBorderColor #ca8a04\n"
         "skinparam noteFontColor #713f12\n\n"
-        "header PlantUML 矢量查看器\n"
+        "header PlantUML 本地矢量查看器\n"
         "footer 第 1 页，共 1 页\n\n"
-        "class MainWindow {\n"
-        "  - editor : QPlainTextEdit*\n"
-        "  - graphicsView : PlantUmlView*\n"
-        "  - graphicsScene : QGraphicsScene*\n"
-        "  + onTextChanged()\n"
-        "  + onRenderTimerTriggered()\n"
-        "}\n\n"
-        "class PlantUmlView {\n"
-        "  + wheelEvent(QWheelEvent*)\n"
-        "  + resetZoom()\n"
-        "}\n\n"
-        "MainWindow *-- PlantUmlView : 包含 >\n"
-        "note left of MainWindow : QGraphicsScene 能够实现\n极其平滑的矢量缩放，完全无锯齿！\n"
+        "participant \"文本编辑器\" as edit\n"
+        "participant \"控制器\" as ctrl\n"
+        "participant \"解析引擎\" as parser\n"
+        "participant \"布局引擎\" as layout\n"
+        "participant \"场景渲染\" as renderer\n\n"
+        "edit -> ctrl : 输入变化 (防抖响应)\n"
+        "ctrl -> parser : 启动词法与语法分析\n"
+        "parser -> layout : 提取 AST 树并执行几何计算\n"
+        "layout -> renderer : 输出 RenderDoc 并装载图元\n"
+        "renderer --> edit : 渲染完毕 (就绪并双向跳转)\n"
+        "note left of edit : 双击右侧图元\n可以直接高亮编辑器源码行！\n"
         "@enduml"
     );
     
-    // 启动时立即进行首次渲染
-    onRenderTimerTriggered();
+    // 首次主动触发一次本地解析
+    renderController->setSourceText(editor->toPlainText());
 }
 
 MainWindow::~MainWindow()
@@ -79,7 +77,7 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
-    setWindowTitle(tr("PlantUML 矢量查看器"));
+    setWindowTitle(tr("PlantUML 矢量查看器 (纯本地编译版)"));
     resize(1200, 800);
     
     // 1. 创建顶部工具栏
@@ -87,57 +85,57 @@ void MainWindow::setupUi()
     toolBar->setMovable(false);
     toolBar->setFloatable(false);
     
-    // 工具栏左侧标题与状态
     QLabel *titleLabel = new QLabel(tr("PlantUML 查看器"), this);
     titleLabel->setStyleSheet("font-weight: bold; font-size: 11pt; color: #18181b;");
     toolBar->addWidget(titleLabel);
     
     toolBar->addSeparator();
     
+    // 状态提示区
     statusLabel = new QLabel(tr("就绪"), this);
     statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
     toolBar->addWidget(statusLabel);
     
-    // 弹簧占位，让按钮靠右对齐
+    // 弹簧占位，让按钮右对齐
     QWidget *spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar->addWidget(spacer);
     
-    // 重置缩放按钮
+    // 自适应大小按钮
+    btnFit = new QPushButton(tr("适应大小"), this);
+    connect(btnFit, &QPushButton::clicked, this, &MainWindow::fitView);
+    toolBar->addWidget(btnFit);
+    
+    // 1:1 复位缩放按钮
     btnReset = new QPushButton(tr("复位缩放"), this);
     connect(btnReset, &QPushButton::clicked, this, &MainWindow::resetView);
     toolBar->addWidget(btnReset);
     
-    // 手动刷新按钮
-    btnRefresh = new QPushButton(tr("强制刷新"), this);
-    connect(btnRefresh, &QPushButton::clicked, this, &MainWindow::onRenderTimerTriggered);
+    // 强制解析按钮
+    btnRefresh = new QPushButton(tr("强制解析"), this);
+    connect(btnRefresh, &QPushButton::clicked, this, &MainWindow::onTextChanged);
     toolBar->addWidget(btnRefresh);
     
-    // 2. 双栏 Splitter 布局
+    // 2. 双栏 Splitter 容器
     splitter = new QSplitter(Qt::Horizontal, this);
     setCentralWidget(splitter);
     
-    // 左栏：代码编辑框
+    // 左栏：编辑器
     editor = new QPlainTextEdit(this);
     editor->setPlaceholderText(tr("在此输入 PlantUML 代码..."));
-    connect(editor, &QPlainTextEdit::textChanged, this, &MainWindow::onTextChanged);
     splitter->addWidget(editor);
     
-    // 右栏：图形视口
-    graphicsView = new PlantUmlView(this);
-    graphicsScene = new QGraphicsScene(this);
-    graphicsView->setScene(graphicsScene);
+    // 右栏：视口
     splitter->addWidget(graphicsView);
     
-    // 设定初始的左右分栏比例 (编辑器占45%，视口占55%)
     QList<int> sizes;
-    sizes << 540 << 660;
+    sizes << 500 << 700;
     splitter->setSizes(sizes);
 }
 
 void MainWindow::setupStyles()
 {
-    // 精美的现代浅色（Modern Light Theme）极简设计
+    // 现代浅色极简设计 QSS
     QString qss = R"(
         QMainWindow {
             background-color: #f9fafb;
@@ -196,73 +194,49 @@ void MainWindow::setupStyles()
 
 void MainWindow::onTextChanged()
 {
-    // 打字过程中重置防抖计时器
-    renderTimer->start();
+    // 输入改变，向控制器发出文本
+    renderController->setSourceText(editor->toPlainText());
 }
 
-void MainWindow::onRenderTimerTriggered()
+void MainWindow::onRenderFinished(const QVector<ParseError> &errors)
 {
-    QString code = editor->toPlainText();
-    if (code.trimmed().isEmpty()) {
-        graphicsScene->clear();
-        statusLabel->setText(tr("暂无内容"));
-        statusLabel->setStyleSheet("color: #71717a; font-weight: bold;");
-        return;
-    }
-    
-    // C++ 调用 Deflate 压缩 + 自定义 Base64 编码
-    QString encoded = encoder->encode(code);
-    if (encoded.isEmpty()) return;
-    
-    statusLabel->setText(tr("正在渲染..."));
-    statusLabel->setStyleSheet("color: #38bdf8; font-weight: bold;");
-    
-    // 拼装 PlantUML 官方在线渲染服务器接口
-    QUrl url("http://www.plantuml.com/plantuml/svg/" + encoded);
-    QNetworkRequest request(url);
-    
-    // 发送异步网络请求
-    networkManager->get(request);
-}
-
-void MainWindow::onNetworkReplyFinished(QNetworkReply *reply)
-{
-    // 处理重定向或网络错误
-    if (reply->error() == QNetworkReply::NoError) {
-        QByteArray svgData = reply->readAll();
-        
-        // 验证下载到的字节流是否是合法的 XML/SVG 数据
-        if (svgData.startsWith("<?xml") || svgData.contains("<svg")) {
-            graphicsScene->clear();
-            
-            // 使用 QSvgRenderer 直接基于内存字节流进行渲染
-            auto *svgItem = new QGraphicsSvgItem();
-            auto *renderer = new QSvgRenderer(svgData, graphicsScene); // scene 拥有其生命周期
-            
-            svgItem->setSharedRenderer(renderer);
-            graphicsScene->addItem(svgItem);
-            
-            // 设定场景的边界矩形为 SVG 的自然大小
-            graphicsScene->setSceneRect(svgItem->boundingRect());
-            
-            // 重置缩放并把图置中
-            graphicsView->resetZoom();
-            
-            statusLabel->setText(tr("就绪"));
-            statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
-        } else {
-            statusLabel->setText(tr("语法错误 / 无效的 SVG 图像"));
-            statusLabel->setStyleSheet("color: #ef4444; font-weight: bold;");
-        }
+    if (errors.isEmpty()) {
+        statusLabel->setText(tr("就绪"));
+        statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
     } else {
-        statusLabel->setText(tr("网络错误 / 连接失败"));
+        // 抓取第一条语法错误直接在状态栏中以红字警示
+        const auto &err = errors.first();
+        statusLabel->setText(QString(tr("语法错误：第 %1 行 - %2")).arg(err.location.line).arg(err.message));
         statusLabel->setStyleSheet("color: #ef4444; font-weight: bold;");
     }
+}
+
+void MainWindow::onItemActivated(QString semanticId, SourceLocation location)
+{
+    Q_UNUSED(semanticId);
     
-    reply->deleteLater();
+    if (location.line <= 0) return;
+    
+    // 获取指定行数的文本块 (行号从 0 开始)
+    QTextBlock block = editor->document()->findBlockByLineNumber(location.line - 1);
+    if (block.isValid()) {
+        QTextCursor cursor(block);
+        
+        // 选中这一整行，反白显示，增加视觉提示
+        cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+        editor->setTextCursor(cursor);
+        
+        // 强制编辑区获取焦点
+        editor->setFocus();
+    }
 }
 
 void MainWindow::resetView()
 {
     graphicsView->resetZoom();
+}
+
+void MainWindow::fitView()
+{
+    graphicsView->fitToContent();
 }
