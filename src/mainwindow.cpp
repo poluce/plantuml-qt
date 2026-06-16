@@ -51,8 +51,8 @@ MainWindow::MainWindow(QWidget *parent)
         "skinparam noteBackgroundColor #fef08a\n"
         "skinparam noteBorderColor #ca8a04\n"
         "skinparam noteFontColor #713f12\n\n"
-        "header PlantUML GraphicsScene Viewer\n"
-        "footer Page 1 of 1\n\n"
+        "header PlantUML 矢量查看器\n"
+        "footer 第 1 页，共 1 页\n\n"
         "class MainWindow {\n"
         "  - editor : QPlainTextEdit*\n"
         "  - graphicsView : PlantUmlView*\n"
@@ -64,8 +64,8 @@ MainWindow::MainWindow(QWidget *parent)
         "  + wheelEvent(QWheelEvent*)\n"
         "  + resetZoom()\n"
         "}\n\n"
-        "MainWindow *-- PlantUmlView : Contains >\n"
-        "note left of MainWindow : QGraphicsScene enables extremely\nsmooth vector scaling without pixelation!\n"
+        "MainWindow *-- PlantUmlView : 包含 >\n"
+        "note left of MainWindow : QGraphicsScene 能够实现\n极其平滑的矢量缩放，完全无锯齿！\n"
         "@enduml"
     );
     
@@ -79,22 +79,22 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
-    setWindowTitle(tr("PlantUML GraphicsScene Viewer"));
+    setWindowTitle(tr("PlantUML 矢量查看器"));
     resize(1200, 800);
     
     // 1. 创建顶部工具栏
-    QToolBar *toolBar = addToolBar(tr("Main Toolbar"));
+    QToolBar *toolBar = addToolBar(tr("主工具栏"));
     toolBar->setMovable(false);
     toolBar->setFloatable(false);
     
     // 工具栏左侧标题与状态
-    QLabel *titleLabel = new QLabel(tr("PlantUML Viewer"), this);
+    QLabel *titleLabel = new QLabel(tr("PlantUML 查看器"), this);
     titleLabel->setStyleSheet("font-weight: bold; font-size: 11pt; color: #18181b;");
     toolBar->addWidget(titleLabel);
     
     toolBar->addSeparator();
     
-    statusLabel = new QLabel(tr("Ready"), this);
+    statusLabel = new QLabel(tr("就绪"), this);
     statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
     toolBar->addWidget(statusLabel);
     
@@ -104,12 +104,12 @@ void MainWindow::setupUi()
     toolBar->addWidget(spacer);
     
     // 重置缩放按钮
-    btnReset = new QPushButton(tr("Reset Zoom"), this);
+    btnReset = new QPushButton(tr("复位缩放"), this);
     connect(btnReset, &QPushButton::clicked, this, &MainWindow::resetView);
     toolBar->addWidget(btnReset);
     
     // 手动刷新按钮
-    btnRefresh = new QPushButton(tr("Force Refresh"), this);
+    btnRefresh = new QPushButton(tr("强制刷新"), this);
     connect(btnRefresh, &QPushButton::clicked, this, &MainWindow::onRenderTimerTriggered);
     toolBar->addWidget(btnRefresh);
     
@@ -119,7 +119,7 @@ void MainWindow::setupUi()
     
     // 左栏：代码编辑框
     editor = new QPlainTextEdit(this);
-    editor->setPlaceholderText(tr("Enter your PlantUML code here..."));
+    editor->setPlaceholderText(tr("在此输入 PlantUML 代码..."));
     connect(editor, &QPlainTextEdit::textChanged, this, &MainWindow::onTextChanged);
     splitter->addWidget(editor);
     
@@ -205,7 +205,7 @@ void MainWindow::onRenderTimerTriggered()
     QString code = editor->toPlainText();
     if (code.trimmed().isEmpty()) {
         graphicsScene->clear();
-        statusLabel->setText(tr("Empty"));
+        statusLabel->setText(tr("暂无内容"));
         statusLabel->setStyleSheet("color: #71717a; font-weight: bold;");
         return;
     }
@@ -214,7 +214,7 @@ void MainWindow::onRenderTimerTriggered()
     QString encoded = encoder->encode(code);
     if (encoded.isEmpty()) return;
     
-    statusLabel->setText(tr("Rendering..."));
+    statusLabel->setText(tr("正在渲染..."));
     statusLabel->setStyleSheet("color: #38bdf8; font-weight: bold;");
     
     // 拼装 PlantUML 官方在线渲染服务器接口
@@ -248,14 +248,14 @@ void MainWindow::onNetworkReplyFinished(QNetworkReply *reply)
             // 重置缩放并把图置中
             graphicsView->resetZoom();
             
-            statusLabel->setText(tr("Ready"));
+            statusLabel->setText(tr("就绪"));
             statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
         } else {
-            statusLabel->setText(tr("Diagram Syntax Error / Invalid SVG"));
+            statusLabel->setText(tr("语法错误 / 无效的 SVG 图像"));
             statusLabel->setStyleSheet("color: #ef4444; font-weight: bold;");
         }
     } else {
-        statusLabel->setText(tr("Network Error / Connection Failed"));
+        statusLabel->setText(tr("网络错误 / 连接失败"));
         statusLabel->setStyleSheet("color: #ef4444; font-weight: bold;");
     }
     
