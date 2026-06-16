@@ -6,10 +6,19 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTextBlock>
+#include <QListWidget>
+#include <QHash>
 #include "graphics/DiagramScene.h"
 #include "graphics/DiagramView.h"
 #include "app/RenderController.h"
 #include "parser/ParseError.h"
+
+// 已打开文件的数据模型
+struct OpenedFile
+{
+    QString filePath;   // 本地绝对路径 (新建未保存文件则为空)
+    QString content;    // 内存中的最新源码内容
+};
 
 class MainWindow : public QMainWindow
 {
@@ -20,36 +29,54 @@ public:
     ~MainWindow() override;
 
 private slots:
-    // 文本输入改变，通报给控制器
+    // 文本内容更改槽
     void onTextChanged();
     
-    // 控制器编译渲染完毕回调，用于更新状态栏和错误列表
+    // 编译渲染完毕槽
     void onRenderFinished(const QVector<ParseError> &errors);
     
-    // 拦截右侧画布点击，跳转高亮左侧编辑器源码行
+    // 图元选中触发槽
     void onItemActivated(QString semanticId, SourceLocation location);
     
-    // 复位缩放 1:1
+    // 复位视口
     void resetView();
     
-    // 自适应视口，显示整张时序图
+    // 适应视口
     void fitView();
 
-private:
-    void setupUi();       // 构建双栏交互及工具栏
-    void setupStyles();   // 设定高颜值现代浅色 QSS 样式表
+    // 点击“打开文件”按钮触发槽
+    void onOpenFileClicked();
 
-    // UI 控件
+    // 项目列表中选择项改变触发槽
+    void onCurrentFileChanged(QListWidgetItem *current, QListWidgetItem *previous);
+
+private:
+    void setupUi();       // 构建三栏拉伸布局
+    void setupStyles();   // 现代浅色主题 QSS
+
+    // 三栏界面控件
     QSplitter *splitter;
+    
+    // 最左栏：项目管理
+    QWidget *leftSidebar;
+    QPushButton *btnOpenFile;
+    QListWidget *fileList;
+    
+    // 中间栏：源码编辑器
     QPlainTextEdit *editor;
+    
+    // 右栏：视口
     DiagramView *graphicsView;
     DiagramScene *graphicsScene;
     
+    // 工具栏状态与按钮
     QLabel *statusLabel;
     QPushButton *btnReset;
     QPushButton *btnFit;
     QPushButton *btnRefresh;
 
-    // 本地控制器
+    // 控制层与文件哈希绑定
     RenderController *renderController;
+    QHash<QListWidgetItem*, OpenedFile> m_files;
+    QListWidgetItem *m_currentListItem; // 跟踪当前活跃的项目列表项
 };
