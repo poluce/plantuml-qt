@@ -26,23 +26,14 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
     for (const auto &node : doc.nodes) {
         QGraphicsItem *item = nullptr;
         if (node.kind == RenderNodeKind::ClassBox) {
-            auto *box = new ClassBoxItem(node, theme);
-            
-            // 几何包含关系检测：若本卡片中心点在某个包内，则将其设为该包的子图元，并转换为相对于父包的局部坐标
-            QPointF center = node.rect.center();
-            for (auto *pkgItem : packageItems) {
-                if (pkgItem->originalRect().contains(center)) {
-                    box->setParentItem(pkgItem);
-                    box->setPos(node.rect.topLeft() - pkgItem->originalRect().topLeft());
-                    break;
-                }
-            }
-            item = box;
+            item = new ClassBoxItem(node, theme);
         } else {
             item = new ParticipantItem(node, theme);
         }
         
-        scene->addItem(item);
+        if (!item->scene()) {
+            scene->addItem(item);
+        }
         scene->registerItem(node.id, item);
     }
     
@@ -57,7 +48,6 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
             edge.kind == RenderEdgeKind::Dependency) {
             auto *relItem = new RelationItem(edge, theme);
             
-            // 查找对应的起止图元并建立双向绑定
             QGraphicsItem *fromNode = scene->itemBySemanticId(edge.fromNodeId);
             QGraphicsItem *toNode = scene->itemBySemanticId(edge.toNodeId);
             if (fromNode && toNode) {

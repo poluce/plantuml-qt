@@ -64,7 +64,7 @@ class DiagramAst
 public:
     virtual ~DiagramAst() = default;
     
-    // 运行时类型判定，方便 LayoutEngine 分流
+    // 运行时类型判定，方便 Graphviz 布局管线分流
     virtual bool isSequence() const = 0;
 };
 

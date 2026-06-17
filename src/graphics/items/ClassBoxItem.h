@@ -18,6 +18,7 @@ public:
 
     QString id() const { return m_node.id; }
     SourceLocation location() const { return m_node.location; }
+    QRectF sceneRect() const { return sceneBoundingRect(); }
 
     // 新增：布局反馈状态提取接口
     QPointF initialPos() const { return m_initialPos; }
@@ -27,6 +28,7 @@ public:
     // 新增：连线注册与更新接口
     void addEdge(QGraphicsItem *edge);
     void updateEdges(); // 暴露连线更新接口，用于整体移动时被父包图元调用
+    const QVector<QGraphicsItem*> &edges() const { return m_edges; }
 
 protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;

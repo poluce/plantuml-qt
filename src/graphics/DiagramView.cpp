@@ -34,18 +34,23 @@ void DiagramView::fitToContent()
 {
     if (!scene()) return;
     
-    QRectF sceneRect = scene()->sceneRect();
-    if (sceneRect.isEmpty()) return;
+    QRectF contentRect = scene()->itemsBoundingRect();
+    if (contentRect.isEmpty()) {
+        contentRect = scene()->sceneRect();
+    }
+    if (contentRect.isEmpty()) return;
+
+    contentRect = contentRect.adjusted(-40.0, -40.0, 40.0, 40.0);
     
-    // 调用视图内置函数适应矩形，周围预留 40 像素的内边距
-    fitInView(sceneRect, Qt::KeepAspectRatio);
+    // 调用视图内置函数适应实际内容矩形，而不是包含大留白的 sceneRect
+    fitInView(contentRect, Qt::KeepAspectRatio);
     
     // 可选：限制缩放比例最大不要超过 1.2 倍，防止极小的图被拉得非常巨大
     double currentScale = transform().m11();
     if (currentScale > 1.2) {
         resetTransform();
         scale(1.2, 1.2);
-        centerOn(sceneRect.center());
+        centerOn(contentRect.center());
     }
 }
 

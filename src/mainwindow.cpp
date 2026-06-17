@@ -11,7 +11,9 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QMessageBox>
+#include <QScrollBar>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QMenu>
 #include <QAction>
 #include <QJsonDocument>
@@ -20,6 +22,26 @@
 #include "graphics/items/ClassBoxItem.h"
 #include "graphics/items/PackageGroupItem.h"
 #include "graphics/items/RelationItem.h"
+
+namespace {
+    QTextBlock findSemanticBlock(QPlainTextEdit *editor, const QString &semanticId)
+    {
+        if (!editor || semanticId.isEmpty()) {
+            return {};
+        }
+
+        const QString escapedId = QRegularExpression::escape(semanticId);
+        const QRegularExpression re(
+            QString(R"(^\s*(class|interface|enum|participant|actor)\s+"?%1"?(\s|\{|$))").arg(escapedId));
+
+        for (QTextBlock block = editor->document()->firstBlock(); block.isValid(); block = block.next()) {
+            if (re.match(block.text()).hasMatch()) {
+                return block;
+            }
+        }
+        return {};
+    }
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -163,6 +185,7 @@ void MainWindow::setupUi()
     // 2.2 中间栏：源码编辑器
     editor = new QPlainTextEdit(this);
     editor->setPlaceholderText(tr("在此输入 PlantUML 代码..."));
+    editor->setCenterOnScroll(true);
     splitter->addWidget(editor);
     
     // 2.3 右侧栏：视口
@@ -274,24 +297,54 @@ void MainWindow::onRenderFinished(const QVector<ParseError> &errors)
         statusLabel->setText(QString(tr("语法错误：第 %1 行 - %2")).arg(err.location.line).arg(err.message));
         statusLabel->setStyleSheet("color: #ef4444; font-weight: bold;");
     }
+
+    if (m_pendingAutoFit) {
+        m_pendingAutoFit = false;
+        fitView();
+    }
 }
 
 void MainWindow::onItemActivated(QString semanticId, SourceLocation location)
 {
     qDebug() << "[MainWindow] 点击激活图元 ID:" << semanticId << "行号:" << location.line;
-    Q_UNUSED(semanticId);
     
     if (location.line <= 0) return;
     
-    QTextBlock block = editor->document()->findBlockByLineNumber(location.line - 1);
+    QTextBlock block = findSemanticBlock(editor, semanticId);
     if (block.isValid()) {
+        qDebug() << "[MainWindow] 通过 semanticId 命中 block:"
+                 << "semanticId" << semanticId
+                 << "blockNumber" << (block.blockNumber() + 1)
+                 << "text" << block.text();
+    } else {
+        block = editor->document()->findBlockByLineNumber(location.line - 1);
+    }
+
+    if (block.isValid()) {
+        qDebug() << "[MainWindow] 目标 block:"
+                 << "requestedLine" << location.line
+                 << "blockNumber" << (block.blockNumber() + 1)
+                 << "position" << block.position()
+                 << "length" << block.length()
+                 << "text" << block.text();
+
         QTextCursor cursor(block);
         
         // 选中这一整行，反白显示，增加视觉聚焦提示
         cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
         editor->setTextCursor(cursor);
-        
         editor->setFocus();
+        editor->centerCursor();
+        editor->ensureCursorVisible();
+
+        qDebug() << "[MainWindow] editor cursor:"
+                 << "selectionStart" << editor->textCursor().selectionStart()
+                 << "selectionEnd" << editor->textCursor().selectionEnd()
+                 << "cursorRect" << editor->cursorRect()
+                 << "vScroll" << editor->verticalScrollBar()->value();
+    } else {
+        qWarning() << "[MainWindow] 无法找到目标 block，requestedLine:" << location.line
+                   << "documentBlockCount:" << editor->document()->blockCount();
     }
 }
 
@@ -363,6 +416,7 @@ void MainWindow::onCurrentFileChanged(QListWidgetItem *current, QListWidgetItem 
         }
         
         // 3. 驱动流水线重新解析和高精矢量渲染
+        m_pendingAutoFit = true;
         renderController->setSourceText(openedFile.content);
     }
 }

@@ -6,8 +6,7 @@
 #include <QVector>
 #include "../graphics/DiagramScene.h"
 #include "../graphics/DiagramSceneRenderer.h"
-#include "../layout/SequenceLayoutEngine.h"
-#include "../layout/ClassLayoutEngine.h"
+#include "../graphviz/GraphvizLayoutEngine.h"
 #include "../render_model/RenderTheme.h"
 #include "../parser/ParseError.h"
 
@@ -34,7 +33,6 @@ private:
     QTimer m_debounceTimer;
     RenderTheme m_theme;
     
-    SequenceLayoutEngine m_layoutEngine;
-    ClassLayoutEngine m_classLayoutEngine; // 类图布局器
+    GraphvizLayoutEngine m_layoutEngine;
     DiagramSceneRenderer m_renderer;
 };

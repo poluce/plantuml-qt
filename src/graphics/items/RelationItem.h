@@ -30,6 +30,7 @@ public:
     QPointF initialEnd() const { return m_initialEnd; }
     QPointF currentStart() const { return m_edge.startPoint; }
     QPointF currentEnd() const { return m_edge.endPoint; }
+    QRectF sceneRect() const { return sceneBoundingRect(); }
 
 private:
     // 绘制旋转自适应的各类 UML 箭头和几何符号

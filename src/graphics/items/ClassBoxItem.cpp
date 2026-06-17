@@ -120,7 +120,9 @@ void ClassBoxItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
 
 void ClassBoxItem::addEdge(QGraphicsItem *edge)
 {
-    m_edges.append(edge);
+    if (!m_edges.contains(edge)) {
+        m_edges.append(edge);
+    }
 }
 
 void ClassBoxItem::updateEdges()

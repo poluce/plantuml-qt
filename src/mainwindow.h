@@ -85,4 +85,5 @@ private:
     RenderController *renderController;
     QHash<QListWidgetItem*, OpenedFile> m_files;
     QListWidgetItem *m_currentListItem; // 跟踪当前活跃的项目列表项
+    bool m_pendingAutoFit = false;
 };

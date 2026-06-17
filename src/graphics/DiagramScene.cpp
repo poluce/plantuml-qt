@@ -19,16 +19,32 @@ DiagramScene::DiagramScene(QObject *parent)
         
         // 1. 时序图分支
         if (auto *pItem = dynamic_cast<ParticipantItem*>(item)) {
+            qDebug() << "[DiagramScene] selectionChanged -> ParticipantItem"
+                     << "ID:" << pItem->id()
+                     << "sceneRect:" << pItem->sceneBoundingRect()
+                     << "line:" << pItem->location().line;
             emit itemActivated(pItem->id(), pItem->location());
         }
         else if (auto *mItem = dynamic_cast<MessageArrowItem*>(item)) {
+            qDebug() << "[DiagramScene] selectionChanged -> MessageArrowItem"
+                     << "sceneRect:" << mItem->sceneBoundingRect()
+                     << "line:" << mItem->location().line;
             emit itemActivated("", mItem->location());
         }
         // 2. 类图分支
         else if (auto *cItem = dynamic_cast<ClassBoxItem*>(item)) {
+            qDebug() << "[DiagramScene] selectionChanged -> ClassBoxItem"
+                     << "ID:" << cItem->id()
+                     << "sceneRect:" << cItem->sceneRect()
+                     << "line:" << cItem->location().line;
             emit itemActivated(cItem->id(), cItem->location());
         }
         else if (auto *rItem = dynamic_cast<RelationItem*>(item)) {
+            qDebug() << "[DiagramScene] selectionChanged -> RelationItem"
+                     << "from:" << rItem->fromNodeId()
+                     << "to:" << rItem->toNodeId()
+                     << "sceneRect:" << rItem->sceneRect()
+                     << "line:" << rItem->location().line;
             emit itemActivated("", rItem->location());
         }
     });
@@ -65,16 +81,35 @@ void DiagramScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
         if (auto *cItem = dynamic_cast<ClassBoxItem*>(clickedItem)) {
             itemType = "ClassBoxItem";
             itemId = cItem->id();
+            qDebug() << "[DiagramScene] 命中 ClassBoxItem"
+                     << "ID:" << cItem->id()
+                     << "sceneRect:" << cItem->sceneRect()
+                     << "line:" << cItem->location().line;
         } else if (auto *rItem = dynamic_cast<RelationItem*>(clickedItem)) {
             itemType = "RelationItem";
+            qDebug() << "[DiagramScene] 命中 RelationItem"
+                     << "from:" << rItem->fromNodeId()
+                     << "to:" << rItem->toNodeId()
+                     << "sceneRect:" << rItem->sceneRect()
+                     << "line:" << rItem->location().line;
         } else if (auto *pkgItem = dynamic_cast<PackageGroupItem*>(clickedItem)) {
             itemType = "PackageGroupItem";
             itemId = pkgItem->id();
+            qDebug() << "[DiagramScene] 命中 PackageGroupItem"
+                     << "ID:" << pkgItem->id()
+                     << "sceneRect:" << pkgItem->sceneBoundingRect();
         } else if (auto *pItem = dynamic_cast<ParticipantItem*>(clickedItem)) {
             itemType = "ParticipantItem";
             itemId = pItem->id();
+            qDebug() << "[DiagramScene] 命中 ParticipantItem"
+                     << "ID:" << pItem->id()
+                     << "sceneRect:" << pItem->sceneBoundingRect()
+                     << "line:" << pItem->location().line;
         } else if (auto *mItem = dynamic_cast<MessageArrowItem*>(clickedItem)) {
             itemType = "MessageArrowItem";
+            qDebug() << "[DiagramScene] 命中 MessageArrowItem"
+                     << "sceneRect:" << mItem->sceneBoundingRect()
+                     << "line:" << mItem->location().line;
         }
         
         if (!itemId.isEmpty()) {

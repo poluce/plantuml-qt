@@ -260,7 +260,7 @@ QVector<Token> PumlLexer::tokenize()
                 col++;
             }
             Token t;
-            t.location = {line, startCol, val.length()};
+            t.location = {line, startCol, static_cast<int>(val.length())};
             t.value = val;
             if (val.startsWith("@start")) {
                 t.type = TokenType::StartUml;
@@ -305,7 +305,7 @@ QVector<Token> PumlLexer::tokenize()
             Token tStr;
             tStr.type = TokenType::String;
             tStr.value = strVal;
-            tStr.location = {line, startCol, qMax(1, strVal.length())};
+            tStr.location = {line, startCol, qMax(1, static_cast<int>(strVal.length()))};
             tokens.append(tStr);
             continue;
         }
@@ -330,7 +330,7 @@ QVector<Token> PumlLexer::tokenize()
             Token t;
             t.type = TokenType::Identifier;
             t.value = quotedVal;
-            t.location = {line, startCol, quotedVal.length() + 2};
+            t.location = {line, startCol, static_cast<int>(quotedVal.length()) + 2};
             tokens.append(t);
             continue;
         }
@@ -346,7 +346,7 @@ QVector<Token> PumlLexer::tokenize()
             }
             
             Token t;
-            t.location = {line, startCol, val.length()};
+            t.location = {line, startCol, static_cast<int>(val.length())};
             t.value = val;
             if (val == "participant") {
                 t.type = TokenType::Participant;

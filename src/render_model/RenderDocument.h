@@ -4,6 +4,7 @@
 #include <QVector>
 #include <QRectF>
 #include <QPointF>
+#include <QPainterPath>
 #include "../parser/SourceLocation.h"
 
 enum class RenderNodeKind
@@ -40,11 +41,16 @@ struct RenderEdge
 {
     QString fromNodeId;
     QString toNodeId;
+    QString id;
     
     QPointF startPoint;
     QPointF endPoint;
+    QVector<QPointF> points;
+    QPainterPath path;
     
     QString label;
+    QPointF labelPosition;
+    bool hasLabelPosition = false;
     RenderEdgeKind kind = RenderEdgeKind::SyncCall;
     SourceLocation location;
 };

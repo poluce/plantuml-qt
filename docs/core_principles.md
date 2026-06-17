@@ -13,7 +13,15 @@ PlantUML 源码验证细节
   ↓
 生成 AST
   ↓
-Layout
+LayoutGraph
+  ↓
+DotBuilder
+  ↓
+dot -Tjson
+  ↓
+GraphLayoutResult
+  ↓
+RenderModel
   ↓
 QGraphicsScene 渲染
 ```
@@ -64,8 +72,9 @@ QGraphicsScene 渲染
 ### 5. 架构解耦设计
 不要让 `QGraphicsScene` 或 `QGraphicsItem` 直接面对和解析 PlantUML 文本。
 *   **Parser**：只负责将文本转为 AST。
-*   **LayoutEngine**：根据 AST 计算全部节点、连线和文本的几何几何坐标。
-*   **RenderModel**：独立于 Qt，保存纯绘制数据模型（RenderDocument）。
+*   **LayoutGraph**：把 AST 转换为通用图结构，表达节点、边、rank、方向和 label。
+*   **DotBuilder / dot -Tjson**：把 LayoutGraph 交给 Graphviz 自动排版，取得节点坐标、边路径和文本位置。
+*   **RenderModel**：独立于 Qt，保存纯绘制数据模型（RenderDocument），包括 QRectF、QPainterPath、文本、样式和源码行号。
 *   **QGraphicsScene / Renderer**：读取 RenderDocument，只负责图元的组装、双层卡片绘制与交互响应。
 
 ### 6. 性能目标
@@ -78,5 +87,5 @@ QGraphicsScene 渲染
 *   再看 PlantUML 源码查细节。
 *   然后只实现自己的 PlantUML 子集。
 *   第一版优先做时序图。
-*   解析生成 AST，布局生成 RenderModel，最后用 QGraphicsScene 渲染。
+*   解析生成 AST，转换为 LayoutGraph，Graphviz 排版生成 RenderModel，最后用 QGraphicsScene 渲染。
 *   **核心原则：源码是参考，子集规范才是你的开发依据。**

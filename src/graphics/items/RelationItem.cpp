@@ -1,9 +1,265 @@
 #include "RelationItem.h"
+#include "ClassBoxItem.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
+#include <QGraphicsScene>
 #include <QStyleOptionGraphicsItem>
+#include <algorithm>
 #include <qmath.h>
+
+namespace {
+    enum class BoxSide {
+        Top,
+        Bottom,
+        Left,
+        Right
+    };
+
+    QPointF sideNormal(BoxSide side)
+    {
+        switch (side) {
+        case BoxSide::Top: return QPointF(0.0, -1.0);
+        case BoxSide::Bottom: return QPointF(0.0, 1.0);
+        case BoxSide::Left: return QPointF(-1.0, 0.0);
+        case BoxSide::Right: return QPointF(1.0, 0.0);
+        }
+        return QPointF(0.0, 0.0);
+    }
+
+    bool isHorizontalSide(BoxSide side)
+    {
+        return side == BoxSide::Left || side == BoxSide::Right;
+    }
+
+    void appendUniquePoint(QVector<QPointF> &points, const QPointF &point)
+    {
+        if (points.isEmpty() || points.last() != point) {
+            points.append(point);
+        }
+    }
+
+    QPointF rectSidePoint(const QRectF &rect, BoxSide side, double slot)
+    {
+        slot = qBound(0.0, slot, 1.0);
+        switch (side) {
+        case BoxSide::Top:
+            return QPointF(rect.left() + rect.width() * slot, rect.top());
+        case BoxSide::Bottom:
+            return QPointF(rect.left() + rect.width() * slot, rect.bottom());
+        case BoxSide::Left:
+            return QPointF(rect.left(), rect.top() + rect.height() * slot);
+        case BoxSide::Right:
+            return QPointF(rect.right(), rect.top() + rect.height() * slot);
+        }
+        return rect.center();
+    }
+
+    BoxSide preferredSide(const QRectF &selfRect, const QRectF &otherRect)
+    {
+        const QPointF selfCenter = selfRect.center();
+        const QPointF otherCenter = otherRect.center();
+        const double dx = otherCenter.x() - selfCenter.x();
+        const double dy = otherCenter.y() - selfCenter.y();
+        if (qAbs(dx) >= qAbs(dy)) {
+            return dx >= 0.0 ? BoxSide::Right : BoxSide::Left;
+        }
+        return dy >= 0.0 ? BoxSide::Bottom : BoxSide::Top;
+    }
+
+    double sortKeyForSide(const QRectF &otherRect, BoxSide side)
+    {
+        const QPointF center = otherRect.center();
+        switch (side) {
+        case BoxSide::Left:
+        case BoxSide::Right:
+            return center.y();
+        case BoxSide::Top:
+        case BoxSide::Bottom:
+            return center.x();
+        }
+        return center.x();
+    }
+
+    double slotForRelation(const ClassBoxItem *box, const RelationItem *self, BoxSide side)
+    {
+        if (!box) {
+            return 0.5;
+        }
+
+        struct SlotCandidate {
+            double key = 0.0;
+            const RelationItem *relation = nullptr;
+        };
+
+    QVector<SlotCandidate> candidates;
+    const QRectF selfRect = box->sceneRect();
+    for (auto *edgeItem : box->edges()) {
+        auto *relation = dynamic_cast<RelationItem*>(edgeItem);
+        if (!relation) {
+                continue;
+            }
+
+            const bool boxIsFrom = relation->fromNodeId() == box->id();
+            const QString otherId = boxIsFrom ? relation->toNodeId() : relation->fromNodeId();
+            QGraphicsItem *otherGraphics = box->scene() ? nullptr : nullptr;
+            if (box->scene()) {
+                for (auto *candidate : box->scene()->items()) {
+                    if (auto *otherBox = dynamic_cast<ClassBoxItem*>(candidate)) {
+                        if (otherBox->id() == otherId) {
+                            otherGraphics = otherBox;
+                            break;
+                        }
+                    }
+                }
+            }
+            auto *otherBox = dynamic_cast<ClassBoxItem*>(otherGraphics);
+            if (!otherBox) {
+                continue;
+            }
+
+            const QRectF otherRect = otherBox->sceneRect();
+            if (preferredSide(selfRect, otherRect) != side) {
+                continue;
+            }
+
+            SlotCandidate candidate;
+            candidate.key = sortKeyForSide(otherRect, side);
+            candidate.relation = relation;
+            candidates.append(candidate);
+        }
+
+        if (candidates.isEmpty()) {
+            return 0.5;
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [](const SlotCandidate &a, const SlotCandidate &b) {
+            return a.key < b.key;
+        });
+
+        for (int i = 0; i < candidates.size(); ++i) {
+            if (candidates[i].relation == self) {
+                return static_cast<double>(i + 1) / static_cast<double>(candidates.size() + 1);
+            }
+        }
+        return 0.5;
+    }
+
+    QVector<QPointF> buildOrthogonalPoints(const QPointF &start, BoxSide fromSide, const QPointF &end, BoxSide toSide)
+    {
+        const double stubLength = 24.0;
+        QVector<QPointF> points;
+        const QPointF fromStub = start + sideNormal(fromSide) * stubLength;
+        const QPointF toStub = end + sideNormal(toSide) * stubLength;
+
+        appendUniquePoint(points, start);
+        appendUniquePoint(points, fromStub);
+
+        if (isHorizontalSide(fromSide) && isHorizontalSide(toSide)) {
+            const double midX = (fromStub.x() + toStub.x()) / 2.0;
+            appendUniquePoint(points, QPointF(midX, fromStub.y()));
+            appendUniquePoint(points, QPointF(midX, toStub.y()));
+        } else if (!isHorizontalSide(fromSide) && !isHorizontalSide(toSide)) {
+            const double midY = (fromStub.y() + toStub.y()) / 2.0;
+            appendUniquePoint(points, QPointF(fromStub.x(), midY));
+            appendUniquePoint(points, QPointF(toStub.x(), midY));
+        } else if (isHorizontalSide(fromSide) && !isHorizontalSide(toSide)) {
+            appendUniquePoint(points, QPointF(toStub.x(), fromStub.y()));
+        } else {
+            appendUniquePoint(points, QPointF(fromStub.x(), toStub.y()));
+        }
+
+        appendUniquePoint(points, toStub);
+        appendUniquePoint(points, end);
+        return points;
+    }
+
+    QVector<QPointF> buildHorizontalGuideRoute(
+        const QPointF &start,
+        BoxSide fromSide,
+        const QPointF &end,
+        BoxSide toSide,
+        double guideY)
+    {
+        const double stubLength = 24.0;
+        QVector<QPointF> points;
+        const QPointF fromStub = start + sideNormal(fromSide) * stubLength;
+        const QPointF toStub = end + sideNormal(toSide) * stubLength;
+
+        appendUniquePoint(points, start);
+        appendUniquePoint(points, fromStub);
+        appendUniquePoint(points, QPointF(fromStub.x(), guideY));
+        appendUniquePoint(points, QPointF(toStub.x(), guideY));
+        appendUniquePoint(points, toStub);
+        appendUniquePoint(points, end);
+        return points;
+    }
+
+    QVector<QPointF> buildVerticalGuideRoute(
+        const QPointF &start,
+        BoxSide fromSide,
+        const QPointF &end,
+        BoxSide toSide,
+        double guideX)
+    {
+        const double stubLength = 24.0;
+        QVector<QPointF> points;
+        const QPointF fromStub = start + sideNormal(fromSide) * stubLength;
+        const QPointF toStub = end + sideNormal(toSide) * stubLength;
+
+        appendUniquePoint(points, start);
+        appendUniquePoint(points, fromStub);
+        appendUniquePoint(points, QPointF(guideX, fromStub.y()));
+        appendUniquePoint(points, QPointF(guideX, toStub.y()));
+        appendUniquePoint(points, toStub);
+        appendUniquePoint(points, end);
+        return points;
+    }
+
+    bool segmentHitsRect(const QPointF &a, const QPointF &b, const QRectF &rect)
+    {
+        if (qFuzzyCompare(a.x(), b.x())) {
+            const double x = a.x();
+            const double top = qMin(a.y(), b.y());
+            const double bottom = qMax(a.y(), b.y());
+            return x >= rect.left() && x <= rect.right() && bottom >= rect.top() && top <= rect.bottom();
+        }
+        if (qFuzzyCompare(a.y(), b.y())) {
+            const double y = a.y();
+            const double left = qMin(a.x(), b.x());
+            const double right = qMax(a.x(), b.x());
+            return y >= rect.top() && y <= rect.bottom() && right >= rect.left() && left <= rect.right();
+        }
+        return QRectF(a, b).normalized().intersects(rect);
+    }
+
+    bool routeHitsObstacle(const QVector<QPointF> &points, const QVector<QRectF> &obstacles)
+    {
+        for (int i = 1; i < points.size(); ++i) {
+            const QPointF a = points[i - 1];
+            const QPointF b = points[i];
+            for (const auto &rect : obstacles) {
+                if (segmentHitsRect(a, b, rect)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    QPainterPath buildPathFromPoints(const QVector<QPointF> &points)
+    {
+        QPainterPath path;
+        if (points.isEmpty()) {
+            return path;
+        }
+        path.moveTo(points.first());
+        for (int i = 1; i < points.size(); ++i) {
+            path.lineTo(points[i]);
+        }
+        return path;
+    }
+}
 
 RelationItem::RelationItem(const RenderEdge &edge, const RenderTheme &theme)
     : m_edge(edge)
@@ -19,16 +275,13 @@ RelationItem::RelationItem(const RenderEdge &edge, const RenderTheme &theme)
 
 QRectF RelationItem::boundingRect() const
 {
-    double xMin = qMin(m_edge.startPoint.x(), m_edge.endPoint.x());
-    double xMax = qMax(m_edge.startPoint.x(), m_edge.endPoint.x());
-    double yMin = qMin(m_edge.startPoint.y(), m_edge.endPoint.y());
-    double yMax = qMax(m_edge.startPoint.y(), m_edge.endPoint.y());
-    
-    double w = xMax - xMin;
-    double h = yMax - yMin;
-    
-    // 留出 15 像素的安全包围盒描边边界
-    return QRectF(xMin - 15, yMin - 15, w + 30, h + 30);
+    QRectF rect = m_edge.path.isEmpty()
+        ? QRectF(m_edge.startPoint, m_edge.endPoint).normalized()
+        : m_edge.path.controlPointRect();
+    if (m_edge.hasLabelPosition) {
+        rect = rect.united(QRectF(m_edge.labelPosition.x() - 70.0, m_edge.labelPosition.y() - 14.0, 140.0, 24.0));
+    }
+    return rect.adjusted(-18, -18, 18, 18);
 }
 
 void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
@@ -53,21 +306,36 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     painter->setPen(linePen);
     
     // 2. 根据起止端点几何夹角，计算自适应线身偏移，防止线段穿入三角/菱形图元内部
-    double angle = qAtan2(m_edge.endPoint.y() - m_edge.startPoint.y(), m_edge.endPoint.x() - m_edge.startPoint.x());
+    QPointF startDirFrom = m_edge.startPoint;
+    QPointF startDirTo = m_edge.endPoint;
+    QPointF endDirFrom = m_edge.startPoint;
+    QPointF endDirTo = m_edge.endPoint;
+    if (m_edge.points.size() >= 2) {
+        startDirFrom = m_edge.points.first();
+        startDirTo = m_edge.points[1];
+        endDirFrom = m_edge.points[m_edge.points.size() - 2];
+        endDirTo = m_edge.points.last();
+    }
+    const double startAngle = qAtan2(startDirTo.y() - startDirFrom.y(), startDirTo.x() - startDirFrom.x());
+    const double endAngle = qAtan2(endDirTo.y() - endDirFrom.y(), endDirTo.x() - endDirFrom.x());
     
     QPointF startPt = m_edge.startPoint;
     QPointF endPt = m_edge.endPoint;
     
     if (m_edge.kind == RenderEdgeKind::Inheritance || m_edge.kind == RenderEdgeKind::Realization) {
         double arrowLen = m_theme.arrowSize + 2.0;
-        startPt = m_edge.startPoint + QPointF(qCos(angle), qSin(angle)) * arrowLen;
+        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * arrowLen;
     } else if (m_edge.kind == RenderEdgeKind::Composition || m_edge.kind == RenderEdgeKind::Aggregation) {
         double diamondLen = m_theme.arrowSize * 1.5;
-        startPt = m_edge.startPoint + QPointF(qCos(angle), qSin(angle)) * diamondLen;
+        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * diamondLen;
     }
     
     // 绘制连线线身
-    painter->drawLine(startPt, endPt);
+    if (m_edge.path.isEmpty()) {
+        painter->drawLine(startPt, endPt);
+    } else {
+        painter->drawPath(m_edge.path);
+    }
     
     // 3. 在对应的端点上绘制矢量旋转对齐的 UML 箭头/符号
     if (m_edge.kind == RenderEdgeKind::Inheritance || 
@@ -75,10 +343,10 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         m_edge.kind == RenderEdgeKind::Composition || 
         m_edge.kind == RenderEdgeKind::Aggregation) {
         // 源端（起点）绘制
-        drawRotatedArrow(painter, m_edge.startPoint, angle, m_edge.kind);
+        drawRotatedArrow(painter, m_edge.startPoint, startAngle, m_edge.kind);
     } else {
         // 宿端（终点）绘制
-        drawRotatedArrow(painter, m_edge.endPoint, angle, m_edge.kind);
+        drawRotatedArrow(painter, endDirTo, endAngle, m_edge.kind);
     }
     
     // 4. 绘制可能存在的关系文本标签 (位于连线中点上方)
@@ -88,8 +356,8 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         font.setPointSize(9);
         painter->setFont(font);
         
-        double xMid = (m_edge.startPoint.x() + m_edge.endPoint.x()) / 2.0;
-        double yMid = (m_edge.startPoint.y() + m_edge.endPoint.y()) / 2.0;
+        double xMid = m_edge.hasLabelPosition ? m_edge.labelPosition.x() : (m_edge.startPoint.x() + m_edge.endPoint.x()) / 2.0;
+        double yMid = m_edge.hasLabelPosition ? m_edge.labelPosition.y() : (m_edge.startPoint.y() + m_edge.endPoint.y()) / 2.0;
         
         QRectF labelRect(xMid - 60.0, yMid - 18.0, 120.0, 15.0);
         painter->drawText(labelRect, Qt::AlignCenter, m_edge.label);
@@ -163,8 +431,12 @@ void RelationItem::drawRotatedArrow(QPainter *painter, const QPointF &tip, doubl
 QPainterPath RelationItem::shape() const
 {
     QPainterPath path;
-    path.moveTo(m_edge.startPoint);
-    path.lineTo(m_edge.endPoint);
+    if (m_edge.path.isEmpty()) {
+        path.moveTo(m_edge.startPoint);
+        path.lineTo(m_edge.endPoint);
+    } else {
+        path = m_edge.path;
+    }
     
     QPainterPathStroker stroker;
     stroker.setWidth(8.0);
@@ -175,7 +447,6 @@ void RelationItem::setNodes(QGraphicsItem *fromNode, QGraphicsItem *toNode)
 {
     m_fromItem = fromNode;
     m_toItem = toNode;
-    trackNodes();
 }
 
 void RelationItem::trackNodes()
@@ -188,40 +459,60 @@ void RelationItem::trackNodes()
     
     QRectF rFrom = m_fromItem->sceneBoundingRect();
     QRectF rTo = m_toItem->sceneBoundingRect();
-    
-    // 计算 from 的 4 个边缘中点
-    QPointF fromPoints[4] = {
-        QPointF(rFrom.left() + rFrom.width() / 2.0, rFrom.top()),    // Top
-        QPointF(rFrom.left() + rFrom.width() / 2.0, rFrom.bottom()), // Bottom
-        QPointF(rFrom.left(), rFrom.top() + rFrom.height() / 2.0),   // Left
-        QPointF(rFrom.right(), rFrom.top() + rFrom.height() / 2.0)   // Right
-    };
-    
-    // 计算 to 的 4 个边缘中点
-    QPointF toPoints[4] = {
-        QPointF(rTo.left() + rTo.width() / 2.0, rTo.top()),
-        QPointF(rTo.left() + rTo.width() / 2.0, rTo.bottom()),
-        QPointF(rTo.left(), rTo.top() + rTo.height() / 2.0),
-        QPointF(rTo.right(), rTo.top() + rTo.height() / 2.0)
-    };
-    
-    double minD2 = -1.0;
-    QPointF bestFrom, bestTo;
-    
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            QPointF diff = fromPoints[i] - toPoints[j];
-            double d2 = diff.x() * diff.x() + diff.y() * diff.y();
-            if (minD2 < 0.0 || d2 < minD2) {
-                minD2 = d2;
-                bestFrom = fromPoints[i];
-                bestTo = toPoints[j];
-            }
-        }
-    }
+
+    const BoxSide fromSide = preferredSide(rFrom, rTo);
+    const BoxSide toSide = preferredSide(rTo, rFrom);
+    const auto *fromBox = dynamic_cast<const ClassBoxItem*>(m_fromItem);
+    const auto *toBox = dynamic_cast<const ClassBoxItem*>(m_toItem);
+    const double fromSlot = slotForRelation(fromBox, this, fromSide);
+    const double toSlot = slotForRelation(toBox, this, toSide);
+
+    const QPointF bestFrom = rectSidePoint(rFrom, fromSide, fromSlot);
+    const QPointF bestTo = rectSidePoint(rTo, toSide, toSlot);
     
     m_edge.startPoint = bestFrom;
     m_edge.endPoint = bestTo;
+
+    QVector<QRectF> obstacles;
+    QRectF extent = rFrom.united(rTo);
+    if (scene()) {
+        for (auto *item : scene()->items()) {
+            if (item == m_fromItem || item == m_toItem) {
+                continue;
+            }
+            if (auto *box = dynamic_cast<ClassBoxItem*>(item)) {
+                QRectF rect = box->sceneRect().adjusted(-10.0, -10.0, 10.0, 10.0);
+                obstacles.append(rect);
+                extent = extent.united(rect);
+            }
+        }
+    }
+
+    QVector<QVector<QPointF>> candidates;
+    candidates.append(buildOrthogonalPoints(bestFrom, fromSide, bestTo, toSide));
+    candidates.append(buildHorizontalGuideRoute(bestFrom, fromSide, bestTo, toSide, extent.top() - 30.0));
+    candidates.append(buildHorizontalGuideRoute(bestFrom, fromSide, bestTo, toSide, extent.bottom() + 30.0));
+    candidates.append(buildVerticalGuideRoute(bestFrom, fromSide, bestTo, toSide, extent.left() - 30.0));
+    candidates.append(buildVerticalGuideRoute(bestFrom, fromSide, bestTo, toSide, extent.right() + 30.0));
+
+    m_edge.points = candidates.first();
+    for (const auto &candidate : candidates) {
+        if (!routeHitsObstacle(candidate, obstacles)) {
+            m_edge.points = candidate;
+            break;
+        }
+    }
+    m_edge.path = buildPathFromPoints(m_edge.points);
+
+    if (!m_edge.label.isEmpty()) {
+        const int labelIndex = qMax(0, (m_edge.points.size() - 2) / 2);
+        const QPointF a = m_edge.points[labelIndex];
+        const QPointF b = m_edge.points[qMin(labelIndex + 1, m_edge.points.size() - 1)];
+        m_edge.labelPosition = QPointF((a.x() + b.x()) / 2.0, (a.y() + b.y()) / 2.0 - 12.0);
+        m_edge.hasLabelPosition = true;
+    } else {
+        m_edge.hasLabelPosition = false;
+    }
     
     update();
 }

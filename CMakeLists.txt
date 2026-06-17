@@ -36,12 +36,17 @@ qt_add_executable(plantuml-qt
     src/render_model/RenderDocument.h
     src/render_model/RenderTheme.h
 
-    # 布局计算层
-    src/layout/LayoutEngine.h
-    src/layout/SequenceLayoutEngine.h
-    src/layout/SequenceLayoutEngine.cpp
-    src/layout/ClassLayoutEngine.h
-    src/layout/ClassLayoutEngine.cpp
+    # Graphviz 布局管线
+    src/layout_graph/LayoutGraph.h
+    src/graphviz/GraphLayoutResult.h
+    src/graphviz/DotBuilder.h
+    src/graphviz/DotBuilder.cpp
+    src/graphviz/DotProcessRunner.h
+    src/graphviz/DotProcessRunner.cpp
+    src/graphviz/DotJsonParser.h
+    src/graphviz/DotJsonParser.cpp
+    src/graphviz/GraphvizLayoutEngine.h
+    src/graphviz/GraphvizLayoutEngine.cpp
 
     # 画布视口交互层
     src/graphics/DiagramScene.h
