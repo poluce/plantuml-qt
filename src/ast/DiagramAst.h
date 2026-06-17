@@ -55,6 +55,7 @@ struct RelationDecl
     QString text; // 关系连线标签描述
     RelationKind kind = RelationKind::Association;
     SourceLocation location;
+    QString direction; // 用于存储连线中指示的方向，以传递给布局计算
 };
 
 // ================= 统一 AST 抽象基类 =================

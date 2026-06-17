@@ -33,4 +33,5 @@ struct Token
     TokenType type = TokenType::Unknown;
     QString value;
     SourceLocation location;
+    QString direction; // 默认留空，记录如 "up", "down", "left", "right"
 };

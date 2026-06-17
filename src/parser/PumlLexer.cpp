@@ -76,69 +76,177 @@ QVector<Token> PumlLexer::tokenize()
             continue;
         }
         
-        // 2.2 识别关系连线
-        if (c == '<') {
-            int startCol = col;
-            if (i + 3 < len && m_source[i + 1] == '|' && m_source[i + 2] == '-' && m_source[i + 3] == '-') {
-                Token t;
-                t.type = TokenType::Inherit;
-                t.location = {line, startCol, 4};
-                tokens.append(t);
-                i += 4;
-                col += 4;
-                continue;
-            } else if (i + 3 < len && m_source[i + 1] == '|' && m_source[i + 2] == '.' && m_source[i + 3] == '.') {
-                Token t;
-                t.type = TokenType::Realization;
-                t.location = {line, startCol, 4};
-                tokens.append(t);
-                i += 4;
-                col += 4;
-                continue;
+        // 2.2 识别关系连线 (通用前瞻探测)
+        if (c == '<' || c == '*' || c == 'o' || c == '.' || c == '-') {
+            int p = i;
+            QString left = "";
+            if (i + 1 < len && m_source[i] == '<' && m_source[i + 1] == '|') {
+                left = "<|";
+                p += 2;
+            } else if (m_source[i] == '*') {
+                left = "*";
+                p += 1;
+            } else if (m_source[i] == 'o') {
+                left = "o";
+                p += 1;
             }
-        }
-        if (c == '*') {
-            int startCol = col;
-            if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '-') {
-                Token t;
-                t.type = TokenType::Composition;
-                t.location = {line, startCol, 3};
-                tokens.append(t);
-                i += 3;
-                col += 3;
-                continue;
-            }
-        }
-        if (c == 'o') {
-            int startCol = col;
-            if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '-') {
-                Token t;
-                t.type = TokenType::Aggregation;
-                t.location = {line, startCol, 3};
-                tokens.append(t);
-                i += 3;
-                col += 3;
-                continue;
-            }
-        }
-        if (c == '.') {
-            int startCol = col;
-            if (i + 3 < len && m_source[i + 1] == '.' && m_source[i + 2] == '|' && m_source[i + 3] == '>') {
-                Token t;
-                t.type = TokenType::RealizeRight;
-                t.location = {line, startCol, 4};
-                tokens.append(t);
-                i += 4;
-                col += 4;
-                continue;
-            } else if (i + 2 < len && m_source[i + 1] == '.' && m_source[i + 2] == '>') {
-                Token t;
-                t.type = TokenType::Dependency;
-                t.location = {line, startCol, 3};
-                tokens.append(t);
-                i += 3;
-                col += 3;
-                continue;
+            
+            // 探测线体
+            if (p < len && (m_source[p] == '-' || m_source[p] == '.')) {
+                QChar lineChar = m_source[p];
+                int n1 = 0;
+                while (p < len && m_source[p] == lineChar) {
+                    n1++;
+                    p++;
+                }
+                
+                QString directionStr = "";
+                
+                // 尝试匹配带方括号的方向，如 -[left]-
+                if (p < len && m_source[p] == '[') {
+                    int braceEnd = p + 1;
+                    while (braceEnd < len && m_source[braceEnd] != ']' && m_source[braceEnd] != '\n' && m_source[braceEnd] != '\r') {
+                        braceEnd++;
+                    }
+                    if (braceEnd < len && m_source[braceEnd] == ']') {
+                        QString dirVal = m_source.mid(p + 1, braceEnd - p - 1).trimmed().toLower();
+                        if (dirVal == "up" || dirVal == "down" || dirVal == "left" || dirVal == "right" ||
+                            dirVal == "u" || dirVal == "d" || dirVal == "l" || dirVal == "r" ||
+                            dirVal == "top" || dirVal == "bottom" || dirVal == "t" || dirVal == "b") {
+                            
+                            int postBrace = braceEnd + 1;
+                            // 后面必须紧跟至少一个 lineChar
+                            if (postBrace < len && m_source[postBrace] == lineChar) {
+                                directionStr = dirVal;
+                                p = postBrace;
+                                while (p < len && m_source[p] == lineChar) {
+                                    p++;
+                                }
+                            }
+                        }
+                    }
+                }
+                // 尝试匹配不带方括号的方向，如 -up-
+                else if (directionStr.isEmpty() && p < len && m_source[p].isLetter()) {
+                    int letterStart = p;
+                    while (p < len && m_source[p].isLetter()) {
+                        p++;
+                    }
+                    QString dirVal = m_source.mid(letterStart, p - letterStart).toLower();
+                    if (dirVal == "up" || dirVal == "down" || dirVal == "left" || dirVal == "right" ||
+                        dirVal == "u" || dirVal == "d" || dirVal == "l" || dirVal == "r" ||
+                        dirVal == "top" || dirVal == "bottom" || dirVal == "t" || dirVal == "b") {
+                        
+                        // 后面必须紧跟至少一个 lineChar
+                        if (p < len && m_source[p] == lineChar) {
+                            directionStr = dirVal;
+                            while (p < len && m_source[p] == lineChar) {
+                                p++;
+                            }
+                        } else {
+                            // 回退 p
+                            p = letterStart;
+                        }
+                    } else {
+                        // 回退 p
+                        p = letterStart;
+                    }
+                }
+                
+                // 探测右侧标记
+                QString right = "";
+                if (p + 1 < len && m_source[p] == '|' && m_source[p + 1] == '>') {
+                    right = "|>";
+                    p += 2;
+                } else if (p < len && m_source[p] == '>') {
+                    right = ">";
+                    p += 1;
+                }
+                
+                // 判定是否构成合法连线并映射 TokenType
+                TokenType detectedType = TokenType::Unknown;
+                bool isValidRelation = false;
+                
+                if (left == "<|") {
+                    if (lineChar == '-') {
+                        detectedType = TokenType::Inherit;
+                        isValidRelation = true;
+                    } else if (lineChar == '.') {
+                        detectedType = TokenType::Realization;
+                        isValidRelation = true;
+                    }
+                } else if (left == "*") {
+                    if (lineChar == '-') {
+                        if (directionStr.isEmpty() && right.isEmpty()) {
+                            if (n1 >= 2) {
+                                detectedType = TokenType::Composition;
+                                isValidRelation = true;
+                            }
+                        } else {
+                            detectedType = TokenType::Composition;
+                            isValidRelation = true;
+                        }
+                    }
+                } else if (left == "o") {
+                    if (lineChar == '-') {
+                        if (directionStr.isEmpty() && right.isEmpty()) {
+                            if (n1 >= 2) {
+                                detectedType = TokenType::Aggregation;
+                                isValidRelation = true;
+                            }
+                        } else {
+                            detectedType = TokenType::Aggregation;
+                            isValidRelation = true;
+                        }
+                    }
+                } else { // left == ""
+                    if (right == "|>") {
+                        if (lineChar == '-') {
+                            detectedType = TokenType::InheritRight;
+                            isValidRelation = true;
+                        } else if (lineChar == '.') {
+                            detectedType = TokenType::RealizeRight;
+                            isValidRelation = true;
+                        }
+                    } else if (right == ">") {
+                        if (lineChar == '-') {
+                            if (n1 == 1) {
+                                detectedType = TokenType::Arrow;
+                            } else {
+                                detectedType = TokenType::DottedArrow;
+                            }
+                            isValidRelation = true;
+                        } else if (lineChar == '.') {
+                            detectedType = TokenType::Dependency;
+                            isValidRelation = true;
+                        }
+                    }
+                }
+                
+                if (isValidRelation) {
+                    Token t;
+                    t.type = detectedType;
+                    t.value = m_source.mid(i, p - i);
+                    t.location = {line, col, p - i};
+                    
+                    // 标准化方向并写入 direction
+                    if (!directionStr.isEmpty()) {
+                        if (directionStr == "up" || directionStr == "u" || directionStr == "top" || directionStr == "t") {
+                            t.direction = "up";
+                        } else if (directionStr == "down" || directionStr == "d" || directionStr == "bottom" || directionStr == "b") {
+                            t.direction = "down";
+                        } else if (directionStr == "left" || directionStr == "l") {
+                            t.direction = "left";
+                        } else if (directionStr == "right" || directionStr == "r") {
+                            t.direction = "right";
+                        }
+                    }
+                    
+                    tokens.append(t);
+                    col += (p - i);
+                    i = p;
+                    continue;
+                }
             }
         }
         
@@ -202,35 +310,7 @@ QVector<Token> PumlLexer::tokenize()
             continue;
         }
         
-        // 5. 识别箭头与右向继承关系
-        if (c == '-') {
-            int startCol = col;
-            if (i + 3 < len && m_source[i + 1] == '-' && m_source[i + 2] == '|' && m_source[i + 3] == '>') {
-                Token t;
-                t.type = TokenType::InheritRight;
-                t.location = {line, startCol, 4};
-                tokens.append(t);
-                i += 4;
-                col += 4;
-                continue;
-            } else if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '>') {
-                Token t;
-                t.type = TokenType::DottedArrow;
-                t.location = {line, startCol, 3};
-                tokens.append(t);
-                i += 3;
-                col += 3;
-                continue;
-            } else if (i + 1 < len && m_source[i + 1] == '>') {
-                Token t;
-                t.type = TokenType::Arrow;
-                t.location = {line, startCol, 2};
-                tokens.append(t);
-                i += 2;
-                col += 2;
-                continue;
-            }
-        }
+
         
         // 6. 识别带双引号的单词
         if (c == '\"') {

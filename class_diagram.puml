@@ -226,9 +226,9 @@ InteractionDataCollector --> CurveManager
 ReportExportService --> CurveManager
 
 ' UI to Application/Domain Layer interactions
-MainWindow --> MainController
+MainWindow -up-> MainController
 MainController --> CurveManager
-MainController --> ProjectTreeManager
+MainController -left-> ProjectTreeManager
 ChartView *-- ThermalChart
 ThermalChart *-- AnnotationManager
 AnnotationManager o-- ChartAnnotation

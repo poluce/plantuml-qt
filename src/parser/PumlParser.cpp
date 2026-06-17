@@ -477,6 +477,7 @@ std::unique_ptr<ClassDiagramAst> PumlParser::parseClassDiagram(QVector<ParseErro
             rel.from = fromToken.value;
             rel.to = toToken.value;
             rel.text = labelText;
+            rel.direction = relToken.direction;
             
             if (relToken.type == TokenType::Inherit) {
                 rel.kind = RelationKind::Inheritance;
@@ -491,10 +492,18 @@ std::unique_ptr<ClassDiagramAst> PumlParser::parseClassDiagram(QVector<ParseErro
             } else if (relToken.type == TokenType::InheritRight) {
                 rel.from = toToken.value; // 右向继承：对调归一化
                 rel.to = fromToken.value;
+                if (rel.direction == "up") rel.direction = "down";
+                else if (rel.direction == "down") rel.direction = "up";
+                else if (rel.direction == "left") rel.direction = "right";
+                else if (rel.direction == "right") rel.direction = "left";
                 rel.kind = RelationKind::Inheritance;
             } else if (relToken.type == TokenType::RealizeRight) {
                 rel.from = toToken.value; // 右向实现：对调归一化
                 rel.to = fromToken.value;
+                if (rel.direction == "up") rel.direction = "down";
+                else if (rel.direction == "down") rel.direction = "up";
+                else if (rel.direction == "left") rel.direction = "right";
+                else if (rel.direction == "right") rel.direction = "left";
                 rel.kind = RelationKind::Realization;
             } else {
                 rel.kind = RelationKind::Association;

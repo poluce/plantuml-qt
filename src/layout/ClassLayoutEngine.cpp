@@ -115,8 +115,14 @@ RenderDocument ClassLayoutEngine::layout(const ClassDiagramAst &ast, const Rende
         
         // 当连线跨包时，添加包与包之间的依赖边 (fromPkg -> toPkg)
         if (fromPkg != toPkg && activePkgIds.contains(fromPkg) && activePkgIds.contains(toPkg)) {
-            if (!pkgAdj[fromPkg].contains(toPkg)) {
-                pkgAdj[fromPkg].append(toPkg);
+            if (rel.direction == "left") {
+                if (!pkgAdj[toPkg].contains(fromPkg)) {
+                    pkgAdj[toPkg].append(fromPkg);
+                }
+            } else {
+                if (!pkgAdj[fromPkg].contains(toPkg)) {
+                    pkgAdj[fromPkg].append(toPkg);
+                }
             }
         }
     }
@@ -267,8 +273,13 @@ RenderDocument ClassLayoutEngine::layout(const ClassDiagramAst &ast, const Rende
             if (idToActiveIdx.contains(rel.from) && idToActiveIdx.contains(rel.to)) {
                 int fromIdx = idToActiveIdx[rel.from];
                 int toIdx = idToActiveIdx[rel.to];
-                adj[fromIdx].append(toIdx);
-                inDegree[toIdx]++;
+                if (rel.direction == "left") {
+                    adj[toIdx].append(fromIdx);
+                    inDegree[fromIdx]++;
+                } else {
+                    adj[fromIdx].append(toIdx);
+                    inDegree[toIdx]++;
+                }
             }
         }
         
@@ -695,13 +706,25 @@ RenderDocument ClassLayoutEngine::layout(const ClassDiagramAst &ast, const Rende
                         QString toPkg = classToPkg.value(rel.to, "");
                         // 包内关联引力全额计算 (1.0)，跨包关联引力大幅衰减 (0.15)，防止长依赖过度拉伸
                         double weight = (fromPkg == toPkg) ? 1.0 : 0.15;
-                        sumAbsY += classAbsY[rel.to] * weight;
+                        double targetY = classAbsY[rel.to];
+                        if (rel.direction == "up") {
+                            targetY += 120.0;
+                        } else if (rel.direction == "down") {
+                            targetY -= 120.0;
+                        }
+                        sumAbsY += targetY * weight;
                         sumWeights += weight;
                     }
                     else if (rel.to == cId && classAbsY.contains(rel.from)) {
                         QString toPkg = classToPkg.value(rel.from, "");
                         double weight = (fromPkg == toPkg) ? 1.0 : 0.15;
-                        sumAbsY += classAbsY[rel.from] * weight;
+                        double targetY = classAbsY[rel.from];
+                        if (rel.direction == "up") {
+                            targetY -= 120.0;
+                        } else if (rel.direction == "down") {
+                            targetY += 120.0;
+                        }
+                        sumAbsY += targetY * weight;
                         sumWeights += weight;
                     }
                 }
@@ -1074,23 +1097,37 @@ RenderDocument ClassLayoutEngine::layout(const ClassDiagramAst &ast, const Rende
         double dx = qAbs(fromCenterX - toCenterX);
         double dy = qAbs(fromCenterY - toCenterY);
         
-        if (dx > dy) {
-            // 水平流向占主导
-            if (fromCenterX < toCenterX) {
-                startPt = QPointF(rectFrom.right(), fromCenterY);
-                endPt = QPointF(rectTo.left(), toCenterY);
-            } else {
-                startPt = QPointF(rectFrom.left(), fromCenterY);
-                endPt = QPointF(rectTo.right(), toCenterY);
-            }
+        if (rel.direction == "left") {
+            startPt = QPointF(rectFrom.left(), fromCenterY);
+            endPt = QPointF(rectTo.right(), toCenterY);
+        } else if (rel.direction == "right") {
+            startPt = QPointF(rectFrom.right(), fromCenterY);
+            endPt = QPointF(rectTo.left(), toCenterY);
+        } else if (rel.direction == "up") {
+            startPt = QPointF(fromCenterX, rectFrom.top());
+            endPt = QPointF(toCenterX, rectTo.bottom());
+        } else if (rel.direction == "down") {
+            startPt = QPointF(fromCenterX, rectFrom.bottom());
+            endPt = QPointF(toCenterX, rectTo.top());
         } else {
-            // 垂直流向占主导
-            if (fromCenterY < toCenterY) {
-                startPt = QPointF(fromCenterX, rectFrom.bottom());
-                endPt = QPointF(toCenterX, rectTo.top());
+            if (dx > dy) {
+                // 水平流向占主导
+                if (fromCenterX < toCenterX) {
+                    startPt = QPointF(rectFrom.right(), fromCenterY);
+                    endPt = QPointF(rectTo.left(), toCenterY);
+                } else {
+                    startPt = QPointF(rectFrom.left(), fromCenterY);
+                    endPt = QPointF(rectTo.right(), toCenterY);
+                }
             } else {
-                startPt = QPointF(fromCenterX, rectFrom.top());
-                endPt = QPointF(toCenterX, rectTo.bottom());
+                // 垂直流向占主导
+                if (fromCenterY < toCenterY) {
+                    startPt = QPointF(fromCenterX, rectFrom.bottom());
+                    endPt = QPointF(toCenterX, rectTo.top());
+                } else {
+                    startPt = QPointF(fromCenterX, rectFrom.top());
+                    endPt = QPointF(toCenterX, rectTo.bottom());
+                }
             }
         }
         
