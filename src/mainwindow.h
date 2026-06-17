@@ -50,6 +50,12 @@ private slots:
     // 项目列表中选择项改变触发槽
     void onCurrentFileChanged(QListWidgetItem *current, QListWidgetItem *previous);
 
+    // 新增：右键展示文件列表项菜单槽
+    void showFileListContextMenu(const QPoint &pos);
+
+    // 新增：导出布局反馈文件槽
+    void exportLayoutFeedback();
+
 private:
     void setupUi();       // 构建三栏拉伸布局
     void setupStyles();   // 现代浅色主题 QSS

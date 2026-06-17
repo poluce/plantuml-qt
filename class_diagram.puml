@@ -1,0 +1,238 @@
+@startuml PerseidsAnalyze_ClassDiagram
+
+' 控制布局流向
+left to right direction
+
+package "Domain Layer (领域层)" #fff7ed {
+    enum CurveType {
+        RawMain
+        DerivedMain
+        DerivedHelper
+    }
+    
+    class CurveMetadata {
+        +device : QString
+        +sampleName : QString
+        +signalName : QString
+        +sampleMass : double
+        +heatingRate : double
+    }
+    
+    class ThermalDataPoint {
+        +time : double
+        +temperature : double
+        +value : double
+    }
+    
+    class ThermalCurve {
+        -m_id : QString
+        -m_parentId : QString
+        -m_projectName : QString
+        -m_name : QString
+        -m_type : CurveType
+        -m_metadata : CurveMetadata
+        -m_rawData : QVector<ThermalDataPoint>
+        -m_processedData : QVector<ThermalDataPoint>
+        +id() : QString
+        +parentId() : QString
+        +type() : CurveType
+        +setType(CurveType) : void
+        +metadata() : CurveMetadata
+        +rawData() : QVector<ThermalDataPoint>
+        +processedData() : QVector<ThermalDataPoint>
+    }
+    
+    interface IThermalAlgorithm {
+        {abstract} +name() : QString
+        {abstract} +displayName() : QString
+        {abstract} +category() : QString
+        {abstract} +executeWithContext(...) : AlgorithmResult
+        {abstract} +inheritsParentYAxis() : bool
+    }
+    
+    interface IProgressReporter {
+        {abstract} +shouldCancel() : bool
+        {abstract} +reportProgress(int, QString) : void
+    }
+    
+    class UnitDeriver {
+        +deriveProcessedUnits(...) : CurveUnitState
+        +deriveProcessedSignalUnit(...) : SignalUnitSpec
+        +convertSignalValueToProcessed(...) : double
+    }
+    
+    class UnitFormatter {
+        +temperatureUnitText(...) : QString
+        +signalUnitText(...) : QString
+        +defaultYAxisTitle() : QString
+    }
+    
+    class CurveUnitNormalizer {
+        +normalize(ThermalCurve&) : void
+    }
+}
+
+package "Application Layer (应用层)" #f0fdf4 {
+    class CurveManager {
+        -m_curves : QHash<QString, ThermalCurve>
+        -m_fileReader : IFileReader*
+        +addCurve(ThermalCurve&) : void
+        +getCurve(QString&) : ThermalCurve
+        +curveIdsInOrder() : QStringList
+    }
+    
+    class ProjectTreeManager {
+        -m_curveMgr : CurveManager*
+        +rebuildTree() : void
+        +setActiveCurve(QString&) : void
+    }
+    
+    class AlgorithmManager {
+        -m_algorithms : QMap<QString, IThermalAlgorithm*>
+        -m_threadPool : QThreadPool*
+        +registerAlgorithm(IThermalAlgorithm*) : void
+        +executeAsync(QString&, ThermalCurve&) : QString
+    }
+    
+    class InteractionDataCollector {
+        -m_algoMgr : AlgorithmManager*
+        -m_curveMgr : CurveManager*
+        +run(QString&, QString&) : void
+        +submitPoints(...) : void
+    }
+    
+    class CommandManager {
+        -m_undoStack : QUndoStack*
+        +executeCommand(QUndoCommand*) : bool
+        +undo() : bool
+        +redo() : bool
+    }
+    
+    class ReportExportService {
+        -m_curveMgr : CurveManager*
+        +exportReport(...) : ExportResult
+    }
+}
+
+package "Infrastructure Layer (基础设施层)" #faf5ff {
+    interface IFileReader {
+        {abstract} +canRead(QString&) : bool
+        {abstract} +read(QString&) : ThermalCurve
+    }
+    
+    class TextFileReader {
+        +canRead(QString&) : bool
+        +read(QString&) : ThermalCurve
+    }
+    
+    class DifferentiationAlgorithm {
+        -m_differentiator : SmoothDifferentiator
+        +executeWithContext(...) : AlgorithmResult
+    }
+    
+    class MovingAverageFilterAlgorithm {
+        -m_filter : MovingAverageFilter
+        +executeWithContext(...) : AlgorithmResult
+    }
+    
+    class TemperatureExtrapolationAlgorithm {
+        -m_extrapolator : TemperatureExtrapolator
+        +executeWithContext(...) : AlgorithmResult
+    }
+    
+    class SmoothDifferentiator {
+        +apply(QVector<double>&, QVector<double>&) : Result
+    }
+    
+    class MovingAverageFilter {
+        +apply(QVector<double>&, QVector<double>&) : Result
+    }
+    
+    class TemperatureExtrapolator {
+        +compute(...) : Result
+    }
+}
+
+package "UI Layer (用户界面层)" #f0f9ff {
+    class MainWindow {
+        -m_controller : MainController*
+        -m_chartView : ChartView*
+        -m_explorerView : ProjectExplorerView*
+    }
+    
+    class MainController {
+        -m_curveMgr : CurveManager*
+        -m_treeMgr : ProjectTreeManager*
+        -m_algoExecCtrl : AlgorithmExecutionController*
+        -m_curveViewCtrl : CurveViewController*
+    }
+    
+    class ChartView {
+        -m_chart : ThermalChart*
+        -m_activePeakTool : PeakAreaTool*
+        +startAlgorithmPointSelection(...) : void
+    }
+    
+    class ThermalChart {
+        -m_curveMgr : CurveManager*
+        -m_annotationMgr : AnnotationManager*
+        +addCurve(ThermalCurve&) : void
+    }
+    
+    class AnnotationManager {
+        -m_annotations : QList<ChartAnnotation*>
+        +addAnnotation(ChartAnnotation*) : void
+    }
+    
+    class ChartAnnotation {
+        -m_curveId : QString
+        -m_text : QString
+        +setAnchorPoint(...) : void
+        +exportSnapshot() : std::optional<AnnotationExportSnapshot>
+    }
+    
+    class PeakAreaTool {
+        +peakAreaText() : QString
+    }
+    
+    class TrapezoidMeasureTool {
+        +measureValue() : double
+    }
+}
+
+' ==================== 关系定义 ====================
+
+' Domain Layer Relationships
+ThermalCurve *-- CurveMetadata
+ThermalCurve *-- ThermalDataPoint
+ThermalCurve --> CurveType
+
+' Infrastructure Implementations
+TextFileReader ..|> IFileReader
+DifferentiationAlgorithm ..|> IThermalAlgorithm
+MovingAverageFilterAlgorithm ..|> IThermalAlgorithm
+TemperatureExtrapolationAlgorithm ..|> IThermalAlgorithm
+
+' Infra internal tool delegation
+DifferentiationAlgorithm *-- SmoothDifferentiator
+MovingAverageFilterAlgorithm *-- MovingAverageFilter
+TemperatureExtrapolationAlgorithm *-- TemperatureExtrapolator
+
+' Application to Domain/Infrastructure interactions
+ProjectTreeManager --> CurveManager
+AlgorithmManager o-- IThermalAlgorithm
+InteractionDataCollector --> AlgorithmManager
+InteractionDataCollector --> CurveManager
+ReportExportService --> CurveManager
+
+' UI to Application/Domain Layer interactions
+MainWindow --> MainController
+MainController --> CurveManager
+MainController --> ProjectTreeManager
+ChartView *-- ThermalChart
+ThermalChart *-- AnnotationManager
+AnnotationManager o-- ChartAnnotation
+ChartAnnotation <|-- PeakAreaTool
+ChartAnnotation <|-- TrapezoidMeasureTool
+
+@endum

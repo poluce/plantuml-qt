@@ -1,6 +1,7 @@
 #include "RenderController.h"
 #include "../parser/PumlLexer.h"
 #include "../parser/PumlParser.h"
+#include "../ast/DiagramAst.h"
 
 RenderController::RenderController(DiagramScene *scene, QObject *parent)
     : QObject(parent)
@@ -32,7 +33,18 @@ void RenderController::doRender()
     
     // 3. 执行布局与图元生成 (容错设计：即使有非致命错，也尽量生成图形显示)
     if (parseResult.ast) {
-        RenderDocument doc = m_layoutEngine.layout(*parseResult.ast, m_theme);
+        RenderDocument doc;
+        if (parseResult.ast->isSequence()) {
+            auto *seqAst = dynamic_cast<SequenceDiagramAst*>(parseResult.ast.get());
+            if (seqAst) {
+                doc = m_layoutEngine.layout(*seqAst, m_theme);
+            }
+        } else {
+            auto *classAst = dynamic_cast<ClassDiagramAst*>(parseResult.ast.get());
+            if (classAst) {
+                doc = m_classLayoutEngine.layout(*classAst, m_theme);
+            }
+        }
         m_renderer.render(m_scene, doc, m_theme);
     } else {
         m_scene->clearDiagram();

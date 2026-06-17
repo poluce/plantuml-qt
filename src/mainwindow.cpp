@@ -11,6 +11,15 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QMessageBox>
+#include <QDebug>
+#include <QMenu>
+#include <QAction>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include "graphics/items/ClassBoxItem.h"
+#include "graphics/items/PackageGroupItem.h"
+#include "graphics/items/RelationItem.h"
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -35,51 +44,53 @@ MainWindow::MainWindow(QWidget *parent)
     // 关键多项目联动：关联列表项的电流更改信号
     connect(fileList, &QListWidget::currentItemChanged, this, &MainWindow::onCurrentFileChanged);
     
-    // 4. 新建一个默认的未命名首屏案例，优化冷启动体验
-    QListWidgetItem *defaultItem = new QListWidgetItem(tr("untitled.puml"), fileList);
-    OpenedFile defaultFile;
-    defaultFile.filePath = ""; // 空代表内存临时草稿
-    defaultFile.content = 
-        "@startuml\n"
-        "skinparam backgroundColor #ffffff\n"
-        "skinparam usecaseBackgroundColor #e0e7ff\n"
-        "skinparam usecaseBorderColor #6366f1\n"
-        "skinparam usecaseArrowColor #4f46e5\n"
-        "skinparam actorBorderColor #4f46e5\n"
-        "skinparam actorBackgroundColor #e0e7ff\n"
-        "skinparam objectBorderColor #4f46e5\n"
-        "skinparam objectBackgroundColor #f3f4f6\n"
-        "skinparam classBorderColor #4f46e5\n"
-        "skinparam arrowColor #4f46e5\n"
-        "skinparam classHeaderBackgroundColor #e0e7ff\n"
-        "skinparam classBackgroundColor #ffffff\n"
-        "skinparam classAttributeFontColor #18181b\n"
-        "skinparam classAttributeFontSize 12\n"
-        "skinparam classFontColor #18181b\n"
-        "skinparam classFontSize 14\n"
-        "skinparam noteBackgroundColor #fef08a\n"
-        "skinparam noteBorderColor #ca8a04\n"
-        "skinparam noteFontColor #713f12\n\n"
-        "header PlantUML 矢量查看器\n"
-        "footer 第 1 页，共 1 页\n\n"
-        "participant \"文本编辑器\" as edit\n"
-        "participant \"控制器\" as ctrl\n"
-        "participant \"解析引擎\" as parser\n"
-        "participant \"布局引擎\" as layout\n"
-        "participant \"场景渲染\" as renderer\n\n"
-        "edit -> ctrl : 输入变化 (防抖响应)\n"
-        "ctrl -> parser : 启动词法与语法分析\n"
-        "parser -> layout : 提取 AST 树并执行几何计算\n"
-        "layout -> renderer : 输出 RenderDoc 并装载图元\n"
-        "renderer --> edit : 渲染完毕 (就绪并双向跳转)\n"
-        "note left of edit : 双击右侧图元\n可以直接高亮编辑器源码行！\n"
-        "@enduml";
+    // 4. 尝试从本地探测并加载默认的测试用例文件，彻底清空 C++ 代码中的硬编码内容
+    QVector<QString> fileNames = {"untitled.puml", "class_diagram.puml"};
+    QListWidgetItem *firstLoadedItem = nullptr;
     
-    // 将默认文件数据载入关联映射表中
-    m_files[defaultItem] = defaultFile;
+    for (const auto &fileName : fileNames) {
+        QString resolvedPath = "";
+        QString content = "";
+        
+        QVector<QString> candidatePaths = {
+            fileName,
+            "../" + fileName,
+            QCoreApplication::applicationDirPath() + "/" + fileName,
+            QCoreApplication::applicationDirPath() + "/../" + fileName
+        };
+        
+        for (const auto &path : candidatePaths) {
+            QFile file(path);
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream in(&file);
+                content = in.readAll();
+                file.close();
+                resolvedPath = path;
+                break;
+            }
+        }
+        
+        if (!resolvedPath.isEmpty()) {
+            QListWidgetItem *item = new QListWidgetItem(fileName, fileList);
+            OpenedFile openedFile;
+            openedFile.filePath = QFileInfo(resolvedPath).absoluteFilePath();
+            openedFile.content = content;
+            m_files[item] = openedFile;
+            
+            if (!firstLoadedItem) {
+                firstLoadedItem = item;
+            }
+        }
+    }
     
-    // 激活第一个默认文件 (这会自动触发 onCurrentFileChanged 进行首次解析绘制)
-    fileList->setCurrentItem(defaultItem);
+    // 激活第一个成功加载的文件 (这会自动触发 onCurrentFileChanged 进行首次解析绘制)
+    if (firstLoadedItem) {
+        fileList->setCurrentItem(firstLoadedItem);
+    }
+    
+    // 启用列表项的自定义右键菜单并绑定信号槽
+    fileList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(fileList, &QListWidget::customContextMenuRequested, this, &MainWindow::showFileListContextMenu);
 }
 
 MainWindow::~MainWindow()
@@ -105,6 +116,7 @@ void MainWindow::setupUi()
     // 状态提示区
     statusLabel = new QLabel(tr("就绪"), this);
     statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
+    statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     toolBar->addWidget(statusLabel);
     
     // 弹簧占位，让按钮靠右对齐
@@ -266,6 +278,7 @@ void MainWindow::onRenderFinished(const QVector<ParseError> &errors)
 
 void MainWindow::onItemActivated(QString semanticId, SourceLocation location)
 {
+    qDebug() << "[MainWindow] 点击激活图元 ID:" << semanticId << "行号:" << location.line;
     Q_UNUSED(semanticId);
     
     if (location.line <= 0) return;
@@ -362,4 +375,140 @@ void MainWindow::resetView()
 void MainWindow::fitView()
 {
     graphicsView->fitToContent();
+}
+
+void MainWindow::showFileListContextMenu(const QPoint &pos)
+{
+    QListWidgetItem *item = fileList->itemAt(pos);
+    if (!item) return;
+
+    // 自动将右键点击项设为当前活跃文件并加载其视图
+    fileList->setCurrentItem(item);
+
+    QMenu menu(this);
+    QAction *exportAct = menu.addAction(tr("导出布局反馈 JSON"));
+    connect(exportAct, &QAction::triggered, this, &MainWindow::exportLayoutFeedback);
+    
+    menu.exec(fileList->mapToGlobal(pos));
+}
+
+void MainWindow::exportLayoutFeedback()
+{
+    QString defaultName = "layout_feedback.json";
+    if (m_currentListItem && m_files.contains(m_currentListItem)) {
+        QFileInfo fi(m_files[m_currentListItem].filePath);
+        if (!fi.baseName().isEmpty()) {
+            defaultName = fi.baseName() + "_layout_feedback.json";
+        }
+    }
+
+    QString savePath = QFileDialog::getSaveFileName(
+        this,
+        tr("导出布局反馈 JSON"),
+        defaultName,
+        tr("JSON 文件 (*.json)")
+    );
+    
+    if (savePath.isEmpty()) return;
+
+    QJsonObject rootObj;
+    rootObj["width"] = graphicsScene->sceneRect().width();
+    rootObj["height"] = graphicsScene->sceneRect().height();
+    if (m_currentListItem && m_files.contains(m_currentListItem)) {
+        rootObj["sourceFile"] = m_files[m_currentListItem].filePath;
+    }
+
+    QJsonArray nodesArray;
+    QJsonArray packagesArray;
+    QJsonArray relationsArray;
+
+    QList<QGraphicsItem*> allItems = graphicsScene->items();
+    for (auto *item : allItems) {
+        if (auto *box = dynamic_cast<ClassBoxItem*>(item)) {
+            QJsonObject nodeObj;
+            nodeObj["id"] = box->id();
+            
+            QGraphicsItem *parent = box->parentItem();
+            if (parent) {
+                if (auto *parentPkg = dynamic_cast<PackageGroupItem*>(parent)) {
+                    nodeObj["parentPackageId"] = parentPkg->id();
+                }
+            } else {
+                nodeObj["parentPackageId"] = "";
+            }
+
+            QJsonObject initGeo;
+            initGeo["x"] = box->initialPos().x();
+            initGeo["y"] = box->initialPos().y();
+            initGeo["width"] = box->size().width();
+            initGeo["height"] = box->size().height();
+            nodeObj["initial"] = initGeo;
+
+            QJsonObject adjGeo;
+            adjGeo["x"] = box->currentRect().x();
+            adjGeo["y"] = box->currentRect().y();
+            adjGeo["width"] = box->currentRect().width();
+            adjGeo["height"] = box->currentRect().height();
+            nodeObj["adjusted"] = adjGeo;
+
+            nodesArray.append(nodeObj);
+        }
+        else if (auto *pkg = dynamic_cast<PackageGroupItem*>(item)) {
+            QJsonObject pkgObj;
+            pkgObj["id"] = pkg->id();
+
+            QJsonObject initGeo;
+            initGeo["x"] = pkg->originalRect().x();
+            initGeo["y"] = pkg->originalRect().y();
+            initGeo["width"] = pkg->originalRect().width();
+            initGeo["height"] = pkg->originalRect().height();
+            pkgObj["initial"] = initGeo;
+
+            QJsonObject adjGeo;
+            adjGeo["x"] = pkg->currentRect().x();
+            adjGeo["y"] = pkg->currentRect().y();
+            adjGeo["width"] = pkg->currentRect().width();
+            adjGeo["height"] = pkg->currentRect().height();
+            pkgObj["adjusted"] = adjGeo;
+
+            packagesArray.append(pkgObj);
+        }
+        else if (auto *rel = dynamic_cast<RelationItem*>(item)) {
+            QJsonObject relObj;
+            relObj["fromNodeId"] = rel->fromNodeId();
+            relObj["toNodeId"] = rel->toNodeId();
+            relObj["label"] = rel->label();
+
+            QJsonObject initGeo;
+            initGeo["startX"] = rel->initialStart().x();
+            initGeo["startY"] = rel->initialStart().y();
+            initGeo["endX"] = rel->initialEnd().x();
+            initGeo["endY"] = rel->initialEnd().y();
+            relObj["initial"] = initGeo;
+
+            QJsonObject adjGeo;
+            adjGeo["startX"] = rel->currentStart().x();
+            adjGeo["startY"] = rel->currentStart().y();
+            adjGeo["endX"] = rel->currentEnd().x();
+            adjGeo["endY"] = rel->currentEnd().y();
+            relObj["adjusted"] = adjGeo;
+
+            relationsArray.append(relObj);
+        }
+    }
+
+    rootObj["nodes"] = nodesArray;
+    rootObj["packages"] = packagesArray;
+    rootObj["relations"] = relationsArray;
+
+    QJsonDocument doc(rootObj);
+    
+    QFile file(savePath);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.write(doc.toJson(QJsonDocument::Indented));
+        file.close();
+        QMessageBox::information(this, tr("导出成功"), tr("布局反馈数据已成功导出为 JSON 文件！请将其发送给 AI 进行分析。"));
+    } else {
+        QMessageBox::warning(this, tr("导出失败"), tr("无法写入反馈 JSON 文件，请检查权限。"));
+    }
 }

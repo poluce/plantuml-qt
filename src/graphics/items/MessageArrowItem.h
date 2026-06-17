@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QGraphicsItem>
+#include <QPainterPath>
 #include "../../render_model/RenderDocument.h"
 #include "../../render_model/RenderTheme.h"
 
@@ -9,8 +10,8 @@ class MessageArrowItem : public QGraphicsItem
 public:
     MessageArrowItem(const RenderEdge &edge, const RenderTheme &theme);
 
-    // 图元包围盒，包含连线上方文字的高度
     QRectF boundingRect() const override;
+    QPainterPath shape() const override;
 
     // 执行消息线、文字和箭头的绘制
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget) override;

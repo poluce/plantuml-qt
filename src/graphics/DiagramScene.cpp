@@ -1,6 +1,11 @@
 #include "DiagramScene.h"
 #include "items/ParticipantItem.h"
 #include "items/MessageArrowItem.h"
+#include "items/ClassBoxItem.h"
+#include "items/RelationItem.h"
+#include "items/PackageGroupItem.h"
+#include <QGraphicsSceneMouseEvent>
+#include <QDebug>
 
 DiagramScene::DiagramScene(QObject *parent)
     : QGraphicsScene(parent)
@@ -12,13 +17,19 @@ DiagramScene::DiagramScene(QObject *parent)
         
         QGraphicsItem *item = items.first();
         
-        // 1. 若点击的是参与者
+        // 1. 时序图分支
         if (auto *pItem = dynamic_cast<ParticipantItem*>(item)) {
             emit itemActivated(pItem->id(), pItem->location());
         }
-        // 2. 若点击的是消息箭头
         else if (auto *mItem = dynamic_cast<MessageArrowItem*>(item)) {
             emit itemActivated("", mItem->location());
+        }
+        // 2. 类图分支
+        else if (auto *cItem = dynamic_cast<ClassBoxItem*>(item)) {
+            emit itemActivated(cItem->id(), cItem->location());
+        }
+        else if (auto *rItem = dynamic_cast<RelationItem*>(item)) {
+            emit itemActivated("", rItem->location());
         }
     });
 }
@@ -41,4 +52,39 @@ void DiagramScene::registerItem(const QString &id, QGraphicsItem *item)
 QGraphicsItem* DiagramScene::itemBySemanticId(const QString &id) const
 {
     return m_itemById.value(id, nullptr);
+}
+
+void DiagramScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
+{
+    QPointF scenePos = event->scenePos();
+    QGraphicsItem *clickedItem = itemAt(scenePos, QTransform());
+    if (clickedItem) {
+        QString itemType = "UnknownItem";
+        QString itemId = "";
+        
+        if (auto *cItem = dynamic_cast<ClassBoxItem*>(clickedItem)) {
+            itemType = "ClassBoxItem";
+            itemId = cItem->id();
+        } else if (auto *rItem = dynamic_cast<RelationItem*>(clickedItem)) {
+            itemType = "RelationItem";
+        } else if (auto *pkgItem = dynamic_cast<PackageGroupItem*>(clickedItem)) {
+            itemType = "PackageGroupItem";
+            itemId = pkgItem->id();
+        } else if (auto *pItem = dynamic_cast<ParticipantItem*>(clickedItem)) {
+            itemType = "ParticipantItem";
+            itemId = pItem->id();
+        } else if (auto *mItem = dynamic_cast<MessageArrowItem*>(clickedItem)) {
+            itemType = "MessageArrowItem";
+        }
+        
+        if (!itemId.isEmpty()) {
+            qDebug() << "[DiagramScene] 鼠标击中图元:" << itemType << "ID:" << itemId << "坐标:" << scenePos;
+        } else {
+            qDebug() << "[DiagramScene] 鼠标击中图元:" << itemType << "坐标:" << scenePos;
+        }
+    } else {
+        qDebug() << "[DiagramScene] 鼠标点击于空白处，坐标:" << scenePos;
+    }
+    
+    QGraphicsScene::mousePressEvent(event);
 }

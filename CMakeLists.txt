@@ -40,6 +40,8 @@ qt_add_executable(plantuml-qt
     src/layout/LayoutEngine.h
     src/layout/SequenceLayoutEngine.h
     src/layout/SequenceLayoutEngine.cpp
+    src/layout/ClassLayoutEngine.h
+    src/layout/ClassLayoutEngine.cpp
 
     # 画布视口交互层
     src/graphics/DiagramScene.h
@@ -54,6 +56,12 @@ qt_add_executable(plantuml-qt
     src/graphics/items/ParticipantItem.cpp
     src/graphics/items/MessageArrowItem.h
     src/graphics/items/MessageArrowItem.cpp
+    src/graphics/items/ClassBoxItem.h
+    src/graphics/items/ClassBoxItem.cpp
+    src/graphics/items/RelationItem.h
+    src/graphics/items/RelationItem.cpp
+    src/graphics/items/PackageGroupItem.h
+    src/graphics/items/PackageGroupItem.cpp
 )
 
 # 链接 Qt 库

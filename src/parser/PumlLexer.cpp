@@ -16,6 +16,14 @@ QVector<Token> PumlLexer::tokenize()
     while (i < len) {
         QChar c = m_source[i];
         
+        // 0. 处理单行注释 '
+        if (c == '\'') {
+            while (i < len && m_source[i] != '\n' && m_source[i] != '\r') {
+                i++;
+            }
+            continue;
+        }
+        
         // 1. 处理换行符 (CRLF/LF)
         if (c == '\n') {
             Token t;
@@ -48,6 +56,92 @@ QVector<Token> PumlLexer::tokenize()
             continue;
         }
         
+        // 2.1 识别大括号 (类成员块界定)
+        if (c == '{') {
+            Token t;
+            t.type = TokenType::LeftBrace;
+            t.location = {line, col, 1};
+            tokens.append(t);
+            i++;
+            col++;
+            continue;
+        }
+        if (c == '}') {
+            Token t;
+            t.type = TokenType::RightBrace;
+            t.location = {line, col, 1};
+            tokens.append(t);
+            i++;
+            col++;
+            continue;
+        }
+        
+        // 2.2 识别关系连线
+        if (c == '<') {
+            int startCol = col;
+            if (i + 3 < len && m_source[i + 1] == '|' && m_source[i + 2] == '-' && m_source[i + 3] == '-') {
+                Token t;
+                t.type = TokenType::Inherit;
+                t.location = {line, startCol, 4};
+                tokens.append(t);
+                i += 4;
+                col += 4;
+                continue;
+            } else if (i + 3 < len && m_source[i + 1] == '|' && m_source[i + 2] == '.' && m_source[i + 3] == '.') {
+                Token t;
+                t.type = TokenType::Realization;
+                t.location = {line, startCol, 4};
+                tokens.append(t);
+                i += 4;
+                col += 4;
+                continue;
+            }
+        }
+        if (c == '*') {
+            int startCol = col;
+            if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '-') {
+                Token t;
+                t.type = TokenType::Composition;
+                t.location = {line, startCol, 3};
+                tokens.append(t);
+                i += 3;
+                col += 3;
+                continue;
+            }
+        }
+        if (c == 'o') {
+            int startCol = col;
+            if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '-') {
+                Token t;
+                t.type = TokenType::Aggregation;
+                t.location = {line, startCol, 3};
+                tokens.append(t);
+                i += 3;
+                col += 3;
+                continue;
+            }
+        }
+        if (c == '.') {
+            int startCol = col;
+            if (i + 3 < len && m_source[i + 1] == '.' && m_source[i + 2] == '|' && m_source[i + 3] == '>') {
+                Token t;
+                t.type = TokenType::RealizeRight;
+                t.location = {line, startCol, 4};
+                tokens.append(t);
+                i += 4;
+                col += 4;
+                continue;
+            } else if (i + 2 < len && m_source[i + 1] == '.' && m_source[i + 2] == '>') {
+                Token t;
+                t.type = TokenType::Dependency;
+                t.location = {line, startCol, 3};
+                tokens.append(t);
+                i += 3;
+                col += 3;
+                continue;
+            }
+        }
+        
         // 3. 处理以 @ 开头的特殊关键字 (@startuml, @enduml)
         if (c == '@') {
             int startCol = col;
@@ -60,9 +154,9 @@ QVector<Token> PumlLexer::tokenize()
             Token t;
             t.location = {line, startCol, val.length()};
             t.value = val;
-            if (val == "@startuml") {
+            if (val.startsWith("@start")) {
                 t.type = TokenType::StartUml;
-            } else if (val == "@enduml") {
+            } else if (val.startsWith("@end")) {
                 t.type = TokenType::EndUml;
             } else {
                 t.type = TokenType::Unknown;
@@ -108,10 +202,18 @@ QVector<Token> PumlLexer::tokenize()
             continue;
         }
         
-        // 5. 识别箭头
+        // 5. 识别箭头与右向继承关系
         if (c == '-') {
             int startCol = col;
-            if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '>') {
+            if (i + 3 < len && m_source[i + 1] == '-' && m_source[i + 2] == '|' && m_source[i + 3] == '>') {
+                Token t;
+                t.type = TokenType::InheritRight;
+                t.location = {line, startCol, 4};
+                tokens.append(t);
+                i += 4;
+                col += 4;
+                continue;
+            } else if (i + 2 < len && m_source[i + 1] == '-' && m_source[i + 2] == '>') {
                 Token t;
                 t.type = TokenType::DottedArrow;
                 t.location = {line, startCol, 3};
@@ -168,6 +270,8 @@ QVector<Token> PumlLexer::tokenize()
             t.value = val;
             if (val == "participant") {
                 t.type = TokenType::Participant;
+            } else if (val == "class" || val == "interface" || val == "enum") {
+                t.type = TokenType::Class;
             } else {
                 t.type = TokenType::Identifier;
             }

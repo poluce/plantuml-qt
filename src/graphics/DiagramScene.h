@@ -23,6 +23,9 @@ signals:
     // 图元被激活（点击），发送语义ID和源码定位以供编辑器跳转
     void itemActivated(QString semanticId, SourceLocation location);
 
+protected:
+    void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
+
 private:
     QHash<QString, QGraphicsItem*> m_itemById;
 };

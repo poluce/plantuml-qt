@@ -1,6 +1,7 @@
 #include "MessageArrowItem.h"
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QStyleOptionGraphicsItem>
 #include <qmath.h>
 
@@ -102,4 +103,15 @@ void MessageArrowItem::drawArrowHead(QPainter *painter, const QPointF &tip, bool
     }
     
     painter->restore();
+}
+
+QPainterPath MessageArrowItem::shape() const
+{
+    QPainterPath path;
+    path.moveTo(m_edge.startPoint);
+    path.lineTo(m_edge.endPoint);
+    
+    QPainterPathStroker stroker;
+    stroker.setWidth(8.0);
+    return stroker.createStroke(path);
 }
