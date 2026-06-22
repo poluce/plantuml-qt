@@ -8,6 +8,8 @@
 #include <QTextBlock>
 #include <QListWidget>
 #include <QHash>
+#include <QPointer>
+#include <QVariantAnimation>
 #include "graphics/DiagramScene.h"
 #include "graphics/DiagramView.h"
 #include "app/RenderController.h"
@@ -59,6 +61,7 @@ private slots:
 private:
     void setupUi();       // 构建三栏拉伸布局
     void setupStyles();   // 现代浅色主题 QSS
+    void setEditorVisible(bool visible, bool animate = true); // 控制滑动编辑器显示/隐藏
 
     // 三栏界面控件
     QSplitter *splitter;
@@ -66,6 +69,7 @@ private:
     // 最左栏：项目管理
     QWidget *leftSidebar;
     QPushButton *btnOpenFile;
+    QPushButton *btnToggleEditor;
     QListWidget *fileList;
     
     // 中间栏：源码编辑器
@@ -80,10 +84,21 @@ private:
     QPushButton *btnReset;
     QPushButton *btnFit;
     QPushButton *btnRefresh;
+    QPushButton *btnTerminal;
 
     // 控制层与文件哈希绑定
     RenderController *renderController;
     QHash<QListWidgetItem*, OpenedFile> m_files;
     QListWidgetItem *m_currentListItem; // 跟踪当前活跃的项目列表项
     bool m_pendingAutoFit = false;
+
+    // 滑动侧边栏动画控制
+    bool m_editorVisible = false;
+    bool m_justChangedFile = false;
+    int m_lastEditorWidth = 430;
+    QPointer<QVariantAnimation> m_animation;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 };
+

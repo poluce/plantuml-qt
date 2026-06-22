@@ -2,7 +2,8 @@
 
 #include <QVector>
 #include <memory>
-#include "Token.h"
+#include <QString>
+#include <QRegularExpression>
 #include "ParseError.h"
 #include "../ast/DiagramAst.h"
 
@@ -12,28 +13,31 @@ struct ParseResult
     QVector<ParseError> errors;
 };
 
+struct ParserContext
+{
+    bool inClassBody = false;
+    QString currentClassId;
+    QVector<QString> packageStack; // 支持嵌套包的包名栈
+};
+
+// 抽象行命令基类
+class LineCommand {
+public:
+    virtual ~LineCommand() = default;
+    virtual bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) = 0;
+};
+
 class PumlParser
 {
 public:
-    explicit PumlParser(const QVector<Token> &tokens);
+    explicit PumlParser(const QString &sourceText);
 
-    // 解析 Token 序列并输出 AST 与错误收集 (运行时自动识别图类型分流)
+    // 解析 PlantUML 并输出 AST 与错误收集 (支持类图与时序图)
     ParseResult parse();
 
 private:
-    Token peek() const;
-    Token next();
-    bool isEof() const;
-    void skipNewlines();
-
-    // 1. 时序图专有解析子程序
-    std::unique_ptr<SequenceDiagramAst> parseSequenceDiagram(QVector<ParseError> &errors);
+    void ensureClassExists(ClassDiagramAst *ast, const QString &id, const SourceLocation &loc);
     void ensureParticipantExists(SequenceDiagramAst *ast, const QString &id, const SourceLocation &loc);
 
-    // 2. 类图专有解析子程序
-    std::unique_ptr<ClassDiagramAst> parseClassDiagram(QVector<ParseError> &errors);
-    void ensureClassExists(ClassDiagramAst *ast, const QString &id, const SourceLocation &loc);
-
-    QVector<Token> m_tokens;
-    int m_pos = 0;
+    QString m_sourceText;
 };

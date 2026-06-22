@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "parser/PumlHighlighter.h"
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -22,6 +23,8 @@
 #include "graphics/items/ClassBoxItem.h"
 #include "graphics/items/PackageGroupItem.h"
 #include "graphics/items/RelationItem.h"
+#include <QGraphicsDropShadowEffect>
+#include <QEvent>
 
 namespace {
     QTextBlock findSemanticBlock(QPlainTextEdit *editor, const QString &semanticId)
@@ -51,6 +54,7 @@ MainWindow::MainWindow(QWidget *parent)
     graphicsScene = new DiagramScene(this);
     graphicsView = new DiagramView(this);
     graphicsView->setScene(graphicsScene);
+    graphicsView->installEventFilter(this); // 安装事件过滤器以实现自适应拉伸
     
     renderController = new RenderController(graphicsScene, this);
     
@@ -65,6 +69,11 @@ MainWindow::MainWindow(QWidget *parent)
     
     // 关键多项目联动：关联列表项的电流更改信号
     connect(fileList, &QListWidget::currentItemChanged, this, &MainWindow::onCurrentFileChanged);
+    
+    // 关联折叠/展开按钮的点击信号
+    connect(btnToggleEditor, &QPushButton::clicked, this, [this]() {
+        setEditorVisible(!m_editorVisible, true);
+    });
     
     // 4. 尝试从本地探测并加载默认的测试用例文件，彻底清空 C++ 代码中的硬编码内容
     QVector<QString> fileNames = {"untitled.puml", "class_diagram.puml"};
@@ -113,6 +122,9 @@ MainWindow::MainWindow(QWidget *parent)
     // 启用列表项的自定义右键菜单并绑定信号槽
     fileList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(fileList, &QListWidget::customContextMenuRequested, this, &MainWindow::showFileListContextMenu);
+    
+    // 初始状态下隐藏 UML 编辑框
+    setEditorVisible(false, false);
 }
 
 MainWindow::~MainWindow()
@@ -145,6 +157,13 @@ void MainWindow::setupUi()
     QWidget *spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     toolBar->addWidget(spacer);
+
+    // 终端按钮 (添加在“适应大小”的左边)
+    btnTerminal = new QPushButton(tr("终端"), this);
+    connect(btnTerminal, &QPushButton::clicked, this, []() {
+        qDebug() << "[MainWindow] 终端按钮被点击";
+    });
+    toolBar->addWidget(btnTerminal);
     
     // 适应大小按钮
     btnFit = new QPushButton(tr("适应大小"), this);
@@ -171,10 +190,20 @@ void MainWindow::setupUi()
     sidebarLayout->setContentsMargins(10, 10, 10, 10);
     sidebarLayout->setSpacing(8);
     
-    // 打开本地文件按钮
-    btnOpenFile = new QPushButton(tr("打开本地文件"), this);
+    // 打开文件与显示/编辑代码并排按钮布局
+    QHBoxLayout *btnLayout = new QHBoxLayout();
+    btnLayout->setSpacing(6);
+    btnLayout->setContentsMargins(0, 0, 0, 0);
+
+    btnOpenFile = new QPushButton(tr("打开"), this);
     connect(btnOpenFile, &QPushButton::clicked, this, &MainWindow::onOpenFileClicked);
-    sidebarLayout->addWidget(btnOpenFile);
+    
+    btnToggleEditor = new QPushButton(tr("编辑"), this);
+    
+    btnLayout->addWidget(btnOpenFile);
+    btnLayout->addWidget(btnToggleEditor);
+    
+    sidebarLayout->addLayout(btnLayout);
     
     // 已打开文件列表
     fileList = new QListWidget(this);
@@ -182,18 +211,24 @@ void MainWindow::setupUi()
     
     splitter->addWidget(leftSidebar);
     
-    // 2.2 中间栏：源码编辑器
-    editor = new QPlainTextEdit(this);
+    // 2.2 源码编辑器（作为 graphicsView 的子窗口悬浮展示，不放入布局）
+    editor = new QPlainTextEdit(graphicsView);
     editor->setPlaceholderText(tr("在此输入 PlantUML 代码..."));
     editor->setCenterOnScroll(true);
-    splitter->addWidget(editor);
+    new PumlHighlighter(editor->document());
+    
+    QGraphicsDropShadowEffect *shadow = new QGraphicsDropShadowEffect(editor);
+    shadow->setBlurRadius(15);
+    shadow->setColor(QColor(0, 0, 0, 45));
+    shadow->setOffset(4, 0);
+    editor->setGraphicsEffect(shadow);
     
     // 2.3 右侧栏：视口
     splitter->addWidget(graphicsView);
     
-    // 设定初始分割比例：最左栏 200px，中栏 430px，右栏 670px
+    // 设定初始分割比例：最左栏 150px，右栏占满整个视口空间
     QList<int> sizes;
-    sizes << 200 << 430 << 670;
+    sizes << 150 << 1150;
     splitter->setSizes(sizes);
 }
 
@@ -310,6 +345,11 @@ void MainWindow::onItemActivated(QString semanticId, SourceLocation location)
     
     if (location.line <= 0) return;
     
+    // 如果编辑器目前处于收起隐藏状态，双击/点击激活图元时自动将其滑动展开
+    if (!m_editorVisible) {
+        setEditorVisible(true, true);
+    }
+    
     QTextBlock block = findSemanticBlock(editor, semanticId);
     if (block.isValid()) {
         qDebug() << "[MainWindow] 通过 semanticId 命中 block:"
@@ -418,6 +458,8 @@ void MainWindow::onCurrentFileChanged(QListWidgetItem *current, QListWidgetItem 
         // 3. 驱动流水线重新解析和高精矢量渲染
         m_pendingAutoFit = true;
         renderController->setSourceText(openedFile.content);
+
+        m_justChangedFile = true;
     }
 }
 
@@ -565,4 +607,78 @@ void MainWindow::exportLayoutFeedback()
     } else {
         QMessageBox::warning(this, tr("导出失败"), tr("无法写入反馈 JSON 文件，请检查权限。"));
     }
+}
+
+void MainWindow::setEditorVisible(bool visible, bool animate)
+{
+    m_editorVisible = visible;
+
+    if (btnToggleEditor) {
+        btnToggleEditor->setText(visible ? tr("收起") : tr("编辑"));
+    }
+
+    if (m_animation) {
+        m_animation->stop();
+    }
+
+    // 计算自适应展开宽度：限定在 350px - 500px 之间，为 graphicsView 宽度的 40%
+    int targetEditorWidth = qBound(350, int(graphicsView->width() * 0.4), 500);
+
+    if (!animate) {
+        if (visible) {
+            editor->show();
+            editor->setGeometry(0, 0, targetEditorWidth, graphicsView->height() / 2);
+            editor->raise();
+        } else {
+            editor->hide();
+            editor->setGeometry(0, 0, 0, graphicsView->height() / 2);
+        }
+        return;
+    }
+
+    int startWidth = editor->width();
+    int endWidth = visible ? targetEditorWidth : 0;
+
+    if (visible) {
+        editor->show();
+        // 强制初始化为 0 宽，防止刚 show 时闪烁出默认大小
+        editor->setGeometry(0, 0, 0, graphicsView->height() / 2);
+        editor->raise();
+        startWidth = 0;
+    }
+
+    m_animation = new QVariantAnimation(this);
+    m_animation->setDuration(250); // 250ms 的过渡动画，利落而优雅
+    m_animation->setStartValue(startWidth);
+    m_animation->setEndValue(endWidth);
+    m_animation->setEasingCurve(QEasingCurve::OutCubic); // 优雅的减速缓动效果
+
+    connect(m_animation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        int width = value.toInt();
+        editor->setGeometry(0, 0, width, graphicsView->height() / 2);
+    });
+
+    connect(m_animation, &QVariantAnimation::finished, this, [this, visible]() {
+        if (!visible) {
+            editor->hide(); // 彻底隐藏，防事件穿透
+        }
+    });
+
+    m_animation->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == graphicsView && event->type() == QEvent::Resize) {
+        // 当右侧视图大小改变时，同步调整悬浮编辑器的尺寸，使其高度占满一半，宽度维持自适应比例
+        if (editor) {
+            if (m_editorVisible) {
+                int targetEditorWidth = qBound(350, int(graphicsView->width() * 0.4), 500);
+                editor->setGeometry(0, 0, targetEditorWidth, graphicsView->height() / 2);
+            } else {
+                editor->setGeometry(0, 0, 0, graphicsView->height() / 2);
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }

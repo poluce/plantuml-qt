@@ -203,24 +203,18 @@ LayoutGraph GraphvizLayoutEngine::buildClassGraph(const ClassDiagramAst &ast) co
         const auto &relation = ast.relations[i];
         LayoutEdge edge;
         edge.id = QString("class_relation_%1").arg(i);
-        edge.from = relation.from;
-        edge.to = relation.to;
+        if (relation.direction == "left" || relation.direction == "up") {
+            edge.from = relation.to;
+            edge.to = relation.from;
+        } else {
+            edge.from = relation.from;
+            edge.to = relation.to;
+        }
         edge.label = relation.text;
         edge.renderKind = relationKindToRenderKind(relation.kind);
         edge.location = relation.location;
         edge.attrs["dir"] = "none";
         graph.edges.append(edge);
-
-        if (relation.direction == "left" || relation.direction == "up") {
-            LayoutEdge constraint;
-            constraint.id = QString("class_relation_constraint_%1").arg(i);
-            constraint.from = relation.to;
-            constraint.to = relation.from;
-            constraint.visible = false;
-            constraint.constraint = true;
-            constraint.attrs["weight"] = "8";
-            graph.edges.append(constraint);
-        }
     }
 
     return graph;

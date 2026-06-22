@@ -1,208 +1,536 @@
 #include "PumlParser.h"
 #include <QDebug>
+#include <QStack>
 
-PumlParser::PumlParser(const QVector<Token> &tokens)
-    : m_tokens(tokens)
-{
-}
-
-Token PumlParser::peek() const
-{
-    if (m_pos < m_tokens.size()) {
-        return m_tokens[m_pos];
+namespace {
+    RelationKind parseRelationKind(const QString &sym)
+    {
+        if (sym == "<|--" || sym == "--|>") return RelationKind::Inheritance;
+        if (sym == "<|.." || sym == "..|>") return RelationKind::Realization;
+        if (sym == "*--") return RelationKind::Composition;
+        if (sym == "o--") return RelationKind::Aggregation;
+        if (sym == "..>") return RelationKind::Dependency;
+        return RelationKind::Association;
     }
-    return Token{TokenType::Eof, "", SourceLocation()};
-}
 
-Token PumlParser::next()
-{
-    Token t = peek();
-    if (m_pos < m_tokens.size()) {
-        m_pos++;
+    QString normalizeDirection(const QString &dir) {
+        if (dir.isEmpty()) return "";
+        QString lower = dir.toLower();
+        if (lower == "u" || lower == "up") return "up";
+        if (lower == "d" || lower == "down") return "down";
+        if (lower == "l" || lower == "left") return "left";
+        if (lower == "r" || lower == "right") return "right";
+        return lower;
     }
-    return t;
-}
 
-bool PumlParser::isEof() const
-{
-    return peek().type == TokenType::Eof;
-}
-
-void PumlParser::skipNewlines()
-{
-    while (!isEof() && peek().type == TokenType::Newline) {
-        next();
+    QString flipDirection(const QString &dir) {
+        if (dir.isEmpty()) return "";
+        if (dir == "up") return "down";
+        if (dir == "down") return "up";
+        if (dir == "left") return "right";
+        if (dir == "right") return "left";
+        return dir;
     }
+}
+
+// ================= 各具体行解析命令实现 =================
+
+// 1. 全局配置/注释/起止指令
+class SkinParamCommand : public LineCommand {
+public:
+    SkinParamCommand() {
+        m_regex = QRegularExpression("^(@startuml(?:\\s+.*)?|@enduml?|skinparam\\s+.*|left\\s+to\\s+right\\s+direction|set\\s+.*)$", QRegularExpression::CaseInsensitiveOption);
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(lineNum);
+        Q_UNUSED(ctx);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+
+        if (line.contains("left to right direction", Qt::CaseInsensitive)) {
+            if (!ast->isSequence()) {
+                static_cast<ClassDiagramAst*>(ast)->leftToRight = true;
+            }
+        }
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 2. 包模块声明命令
+class PackageCommand : public LineCommand {
+public:
+    PackageCommand() {
+        m_regex = QRegularExpression("^package\\s+(?:\"([^\"]+)\"|([^{\\s#]+))\\s*(#[0-9a-fA-F]{6}|#\\w+)?\\s*(\\{?)$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(lineNum);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+
+        if (ast->isSequence()) return true; // 时序图直接跳过包处理
+
+        QString pkgId = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString pkgColor = match.captured(3);
+        bool hasBrace = (match.captured(4) == "{");
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+        
+        ClassDiagramAst::PackageDecl pkg;
+        pkg.id = pkgId;
+        pkg.displayName = pkgId;
+        pkg.color = pkgColor;
+        classAst->packages.append(pkg);
+
+        if (hasBrace) {
+            ctx.packageStack.push_back(pkgId);
+        }
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 3. 右花括号闭合命令
+class RightBraceCommand : public LineCommand {
+public:
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(lineNum);
+        Q_UNUSED(ast);
+        Q_UNUSED(errors);
+        if (line != "}") return false;
+
+        if (ctx.inClassBody) {
+            ctx.inClassBody = false;
+            ctx.currentClassId.clear();
+        } else if (!ctx.packageStack.isEmpty()) {
+            ctx.packageStack.pop_back(); // 正确出栈，修复嵌套包归属 Bug
+        }
+        return true;
+    }
+};
+
+// 4. 类声明命令
+class ClassDeclCommand : public LineCommand {
+public:
+    ClassDeclCommand() {
+        m_regex = QRegularExpression("^(class|interface|enum)\\s+(?:\"([^\"]+)\"|(\\w+))\\s*(?:<<.*>>)?\\s*(#[0-9a-fA-F]{6}|#\\w+)?\\s*(\\{?)$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+
+        if (ast->isSequence()) {
+            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "时序图中不支持类声明语句。"});
+            return true;
+        }
+
+        QString meta = match.captured(1);
+        QString classId = !match.captured(2).isEmpty() ? match.captured(2) : match.captured(3);
+        bool hasBrace = (match.captured(5) == "{");
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+        
+        // 查重并更新或新建
+        ClassDecl* targetDecl = nullptr;
+        for (auto &c : classAst->classes) {
+            if (c.id == classId) {
+                targetDecl = &c;
+                break;
+            }
+        }
+
+        if (!targetDecl) {
+            ClassDecl decl;
+            decl.id = classId;
+            decl.location = SourceLocation{lineNum, 1, (int)line.length()};
+            classAst->classes.append(decl);
+            targetDecl = &classAst->classes.last();
+        }
+
+        targetDecl->metaType = meta;
+        targetDecl->location = SourceLocation{lineNum, 1, (int)line.length()};
+        if (!ctx.packageStack.isEmpty()) {
+            targetDecl->packageName = ctx.packageStack.last();
+        }
+
+        if (hasBrace) {
+            ctx.inClassBody = true;
+            ctx.currentClassId = classId;
+        }
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 5-1. 标准类关系连线命令 (如 A --> B, A <|-- B, A -->[up] B)
+class StandardRelationCommand : public LineCommand {
+public:
+    StandardRelationCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(<\\|--|\\*--|o--|<\\|\\.\\.|\\.\\.>|-->|->|--\\|>|\\.\\.\\|>)(?:\\[(up|down|left|right|u|d|l|r)\\])?\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(ctx);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+        if (ast->isSequence()) return false;
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+
+        RelationDecl rel;
+        rel.from = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString relSym = match.captured(3);
+        rel.direction = normalizeDirection(match.captured(4));
+        rel.to = !match.captured(5).isEmpty() ? match.captured(5) : match.captured(6);
+        rel.text = match.captured(7);
+        rel.kind = parseRelationKind(relSym);
+        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+
+        // 处理右向关系，进行起止点及方向对调归一化
+        if (relSym == "--|>" || relSym == "..|>") {
+            rel.from = rel.to;
+            rel.to = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+            rel.direction = flipDirection(rel.direction);
+        }
+
+        classAst->relations.append(rel);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 5-2. 夹带方向的实线关联连线命令 (如 A -up-> B, A --left-> B, A -down- B)
+class HyphenRelationCommand : public LineCommand {
+public:
+    HyphenRelationCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(?:-+)(up|down|left|right|u|d|l|r)(?:-*)(->|-)\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(ctx);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+        if (ast->isSequence()) return false;
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+
+        RelationDecl rel;
+        rel.from = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        rel.direction = normalizeDirection(match.captured(3));
+        rel.to = !match.captured(5).isEmpty() ? match.captured(5) : match.captured(6);
+        rel.text = match.captured(7);
+        rel.kind = RelationKind::Association;
+        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+
+        classAst->relations.append(rel);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 5-3. 夹带方向的虚线依赖连线命令 (如 A .up.> B, A ..left. B)
+class DotRelationCommand : public LineCommand {
+public:
+    DotRelationCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(?:\\.+)(up|down|left|right|u|d|l|r)(?:\\.*)(\\.>|\\.)\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(ctx);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+        if (ast->isSequence()) return false;
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+
+        RelationDecl rel;
+        rel.from = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        rel.direction = normalizeDirection(match.captured(3));
+        rel.to = !match.captured(5).isEmpty() ? match.captured(5) : match.captured(6);
+        rel.text = match.captured(7);
+        rel.kind = RelationKind::Dependency;
+        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+
+        classAst->relations.append(rel);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 5-4. 夹带方向的特殊几何连线命令 (继承/组合/聚合) (如 A <|--up- B, A -left-|>)
+class SpecialRelationCommand : public LineCommand {
+public:
+    SpecialRelationCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(?:(<\\|\\*|o)-+(up|down|left|right|u|d|l|r)-+|-+(up|down|left|right|u|d|l|r)-*(\\|>))\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        Q_UNUSED(ctx);
+        Q_UNUSED(errors);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+        if (ast->isSequence()) return false;
+
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+
+        RelationDecl rel;
+        rel.from = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        
+        QString symbolHead = match.captured(3);
+        QString dir1 = match.captured(4);
+        QString dir2 = match.captured(5);
+        QString symbolTail = match.captured(6);
+        
+        rel.to = !match.captured(7).isEmpty() ? match.captured(7) : match.captured(8);
+        rel.text = match.captured(9);
+        rel.direction = normalizeDirection(!dir1.isEmpty() ? dir1 : dir2);
+        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+
+        if (symbolHead == "<|") {
+            rel.kind = RelationKind::Inheritance;
+        } else if (symbolHead == "*") {
+            rel.kind = RelationKind::Composition;
+        } else if (symbolHead == "o") {
+            rel.kind = RelationKind::Aggregation;
+        } else if (symbolTail == "|>") {
+            rel.kind = RelationKind::Inheritance;
+            // 右向关系，进行起止点对调归一化
+            rel.from = rel.to;
+            rel.to = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+            rel.direction = flipDirection(rel.direction);
+        }
+
+        classAst->relations.append(rel);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 6. 时序图参与者声明命令
+class ParticipantCommand : public LineCommand {
+public:
+    ParticipantCommand() {
+        m_regex = QRegularExpression("^participant\\s+(?:\"([^\"]+)\"|(\\w+))(?:\\s+as\\s+(?:\"([^\"]+)\"|(\\w+)))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+
+        if (!ast->isSequence()) {
+            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "类图中不支持 participant 声明。"});
+            return true;
+        }
+
+        QString firstVal = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString secondVal = !match.captured(3).isEmpty() ? match.captured(3) : match.captured(4);
+        bool hasAs = !match.captured(3).isEmpty() || !match.captured(4).isEmpty();
+
+        QString id;
+        QString displayName;
+
+        if (hasAs) {
+            // 自适应提取 ID 和显示名称，完美支持两种别名格式
+            // 格式 A: participant "Long Name" as Alias (第一个参数带引号，第二个不带)
+            if (line.contains(QRegularExpression("participant\\s+\"[^\"]+\"\\s+as\\s+\\w+"))) {
+                id = secondVal;
+                displayName = firstVal;
+            } else {
+                // 格式 B: participant Alias as "Long Name" 或其它
+                id = firstVal;
+                displayName = secondVal;
+            }
+        } else {
+            id = firstVal;
+            displayName = firstVal;
+        }
+
+        SequenceDiagramAst* seqAst = static_cast<SequenceDiagramAst*>(ast);
+
+        ParticipantDecl decl;
+        decl.id = id;
+        decl.displayName = displayName;
+        decl.location = SourceLocation{lineNum, 1, (int)line.length()};
+        seqAst->participants.append(decl);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+// 7. 时序图消息连线命令
+class MessageCommand : public LineCommand {
+public:
+    MessageCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(->|-->)\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+
+        if (!ast->isSequence()) {
+            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "类图中不支持时序图消息关系。"});
+            return true;
+        }
+
+        QString fromVal = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString arrowSym = match.captured(3);
+        QString toVal = !match.captured(4).isEmpty() ? match.captured(4) : match.captured(5);
+        QString msgText = match.captured(6); // 冒号后文本可选，完美解决冒号必写 Bug
+
+        SequenceDiagramAst* seqAst = static_cast<SequenceDiagramAst*>(ast);
+
+        MessageStatement stmt;
+        stmt.from = fromVal;
+        stmt.to = toVal;
+        stmt.text = msgText;
+        stmt.kind = (arrowSym == "->") ? MessageKind::Sync : MessageKind::Reply;
+        stmt.location = SourceLocation{lineNum, 1, (int)line.length()};
+        
+        seqAst->statements.append(stmt);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
+
+// ================= PumlParser 实现 =================
+
+PumlParser::PumlParser(const QString &sourceText)
+    : m_sourceText(sourceText)
+{
 }
 
 ParseResult PumlParser::parse()
 {
     ParseResult result;
-    
-    // 1. 前瞻扫描，判定图类型
+
+    // 1. 扫描所有非空行，判定图的类别 (Class 还是 Sequence)
     bool isClass = false;
-    for (const auto &t : m_tokens) {
-        if (t.type == TokenType::Class || t.type == TokenType::Inherit) {
+    QStringList lines = m_sourceText.split('\n');
+    for (const auto &line : lines) {
+        QString trimmed = line.trimmed();
+        if (trimmed.isEmpty() || trimmed.startsWith('\'')) continue;
+
+        // 类图特征前瞻匹配
+        if (trimmed.startsWith("class ") || trimmed.startsWith("interface ") ||
+            trimmed.startsWith("enum ") || trimmed.startsWith("package ") ||
+            trimmed.contains("left to right direction") ||
+            trimmed.contains("<|--") || trimmed.contains("*--") ||
+            trimmed.contains("o--") || trimmed.contains("<|..") ||
+            trimmed.contains("..>") || trimmed.contains("--|>") ||
+            trimmed.contains("..|>") ||
+            trimmed.contains("-up->") || trimmed.contains("-down->") ||
+            trimmed.contains("-left->") || trimmed.contains("-right->") ||
+            trimmed.contains("-up-") || trimmed.contains("-down-") ||
+            trimmed.contains("-left-") || trimmed.contains("-right-") ||
+            trimmed.contains("-u->") || trimmed.contains("-d->") ||
+            trimmed.contains("-l->") || trimmed.contains("-r->")) {
             isClass = true;
             break;
         }
     }
-    
-    // 2. 根据类型自动执行分流解析，返回多态 AST
+
     if (isClass) {
-        result.ast = parseClassDiagram(result.errors);
+        result.ast = std::make_unique<ClassDiagramAst>();
     } else {
-        result.ast = parseSequenceDiagram(result.errors);
+        result.ast = std::make_unique<SequenceDiagramAst>();
     }
+
+    // 2. 依次加载对应的行指令解析集 (栈上定义，解决 unique_ptr 拷贝限制)
+    SkinParamCommand skinParam;
+    PackageCommand package;
+    ClassDeclCommand classDecl;
     
+    // 4 个高内聚的连线指令子模块代替原单一指令类
+    StandardRelationCommand stdRelation;
+    HyphenRelationCommand hyphenRelation;
+    DotRelationCommand dotRelation;
+    SpecialRelationCommand specialRelation;
+
+    RightBraceCommand rightBrace;
+    ParticipantCommand participant;
+    MessageCommand message;
+
+    QVector<LineCommand*> commands = {
+        &skinParam, &package, &classDecl, 
+        &stdRelation, &hyphenRelation, &dotRelation, &specialRelation,
+        &rightBrace, &participant, &message
+    };
+
+    ParserContext ctx;
+
+    // 3. 遍历各行进行模式扫描
+    for (int i = 0; i < lines.size(); ++i) {
+        QString line = lines[i].trimmed();
+        if (line.isEmpty() || line.startsWith('\'')) continue;
+
+        // 特殊处理：读取类成员大括号体内部
+        if (ctx.inClassBody) {
+            if (line == "}") {
+                ctx.inClassBody = false;
+                ctx.currentClassId.clear();
+            } else {
+                ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(result.ast.get());
+                for (auto &c : classAst->classes) {
+                    if (c.id == ctx.currentClassId) {
+                        c.members.append(line);
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // 常规指令匹配
+        bool matched = false;
+        for (auto *cmd : commands) {
+            if (cmd->parse(line, i + 1, result.ast.get(), ctx, result.errors)) {
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            result.errors.append({SourceLocation{i + 1, 1, (int)line.length()}, QString("无法识别的 PlantUML 语法: '%1'。").arg(line)});
+        }
+    }
+
+    // 4. 时序图和类图的隐式实体关联补全
+    if (isClass) {
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(result.ast.get());
+        for (const auto &rel : classAst->relations) {
+            ensureClassExists(classAst, rel.from, rel.location);
+            ensureClassExists(classAst, rel.to, rel.location);
+        }
+    } else {
+        SequenceDiagramAst* seqAst = static_cast<SequenceDiagramAst*>(result.ast.get());
+        for (const auto &stmt : seqAst->statements) {
+            ensureParticipantExists(seqAst, stmt.from, stmt.location);
+            ensureParticipantExists(seqAst, stmt.to, stmt.location);
+        }
+    }
+
     return result;
 }
 
-// ================= 时序图解析逻辑 =================
-std::unique_ptr<SequenceDiagramAst> PumlParser::parseSequenceDiagram(QVector<ParseError> &errors)
+void PumlParser::ensureClassExists(ClassDiagramAst *ast, const QString &id, const SourceLocation &loc)
 {
-    auto ast = std::make_unique<SequenceDiagramAst>();
-    
-    skipNewlines();
-    
-    if (peek().type == TokenType::StartUml) {
-        next();
-        while (!isEof() && peek().type != TokenType::Newline) {
-            next();
-        }
-    } else {
-        ParseError err;
-        err.location = peek().location;
-        err.message = "第一行建议填写 '@startuml' 声明。";
-        err.severity = ParseErrorSeverity::Warning;
-        errors.append(err);
+    for (const auto &c : ast->classes) {
+        if (c.id == id) return;
     }
-    
-    while (!isEof()) {
-        skipNewlines();
-        if (isEof()) break;
-        
-        Token t = peek();
-        
-        if (t.type == TokenType::EndUml) {
-            next();
-            break;
-        }
-        
-        if (t.type == TokenType::Participant) {
-            next();
-            
-            Token idToken = peek();
-            if (idToken.type != TokenType::Identifier) {
-                ParseError err;
-                err.location = idToken.location;
-                err.message = "participant 关键字后需要紧跟参与者标识符。";
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next();
-            
-            QString id = idToken.value;
-            QString displayName = id;
-            
-            if (peek().type == TokenType::Identifier && peek().value == "as") {
-                next();
-                Token aliasToken = peek();
-                if (aliasToken.type != TokenType::Identifier) {
-                    ParseError err;
-                    err.location = aliasToken.location;
-                    err.message = "as 关键字后需要紧跟别名标识符。";
-                    errors.append(err);
-                    while (!isEof() && peek().type != TokenType::Newline) next();
-                    continue;
-                }
-                next();
-                
-                id = aliasToken.value;
-                displayName = idToken.value;
-            }
-            
-            ParticipantDecl decl;
-            decl.id = id;
-            decl.displayName = displayName;
-            decl.location = idToken.location;
-            ast->participants.append(decl);
-            
-            if (peek().type != TokenType::Newline && peek().type != TokenType::Eof) {
-                ParseError err;
-                err.location = peek().location;
-                err.message = "行尾存在多余的无效字符。";
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-            }
-            continue;
-        }
-        
-        if (t.type == TokenType::Identifier) {
-            Token fromToken = next();
-            
-            Token arrowToken = peek();
-            if (arrowToken.type != TokenType::Arrow && arrowToken.type != TokenType::DottedArrow) {
-                ParseError err;
-                err.location = arrowToken.location;
-                err.message = "期望的消息连接符号为 '->' 或 '-->'。";
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next();
-            
-            Token toToken = peek();
-            if (toToken.type != TokenType::Identifier) {
-                ParseError err;
-                err.location = toToken.location;
-                err.message = "消息连接符后缺少目标参与者标识符。";
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next();
-            
-            Token colonToken = peek();
-            if (colonToken.type != TokenType::Colon) {
-                ParseError err;
-                err.location = colonToken.location;
-                err.message = "连线表达式后必须带有冒号 ':' 和消息内容描述。";
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next();
-            
-            Token msgToken = peek();
-            QString msgText;
-            if (msgToken.type == TokenType::String) {
-                msgText = msgToken.value;
-                next();
-            }
-            
-            ensureParticipantExists(ast.get(), fromToken.value, fromToken.location);
-            ensureParticipantExists(ast.get(), toToken.value, toToken.location);
-            
-            MessageStatement stmt;
-            stmt.from = fromToken.value;
-            stmt.to = toToken.value;
-            stmt.text = msgText;
-            stmt.kind = (arrowToken.type == TokenType::Arrow) ? MessageKind::Sync : MessageKind::Reply;
-            stmt.location = arrowToken.location;
-            ast->statements.append(stmt);
-            continue;
-        }
-        
-        ParseError err;
-        err.location = t.location;
-        err.message = QString("无法识别的 PlantUML 时序图语法: '%1'。").arg(t.value);
-        errors.append(err);
-        while (!isEof() && peek().type != TokenType::Newline) next();
-    }
-    
-    return ast;
+    ClassDecl decl;
+    decl.id = id;
+    decl.location = loc;
+    ast->classes.append(decl);
 }
 
 void PumlParser::ensureParticipantExists(SequenceDiagramAst *ast, const QString &id, const SourceLocation &loc)
@@ -215,324 +543,4 @@ void PumlParser::ensureParticipantExists(SequenceDiagramAst *ast, const QString 
     decl.displayName = id;
     decl.location = loc;
     ast->participants.append(decl);
-}
-
-// ================= 类图解析逻辑 =================
-std::unique_ptr<ClassDiagramAst> PumlParser::parseClassDiagram(QVector<ParseError> &errors)
-{
-    auto ast = std::make_unique<ClassDiagramAst>();
-    int packageDepth = 0;
-    QString currentPackageId = "";
-    
-    skipNewlines();
-    
-    if (peek().type == TokenType::StartUml) {
-        next();
-        while (!isEof() && peek().type != TokenType::Newline) {
-            next();
-        }
-    }
-    
-    while (!isEof()) {
-        skipNewlines();
-        if (isEof()) break;
-        
-        Token t = peek();
-        
-        if (t.type == TokenType::EndUml) {
-            next();
-            break;
-        }
-        
-        // 跳过 skinparam 样式块以及 left/right layout 指令
-        if (t.type == TokenType::Identifier && (t.value == "skinparam" || t.value == "left" || t.value == "right")) {
-            QString cmd = t.value;
-            next();
-            
-            if (cmd == "skinparam") {
-                // 判断是否跟了多行大括号配置块，如 skinparam class { ... }
-                while (!isEof() && peek().type != TokenType::LeftBrace && peek().type != TokenType::Newline) {
-                    next();
-                }
-                if (peek().type == TokenType::LeftBrace) {
-                    next(); // 吃掉左大括号 {
-                    int braceDepth = 1;
-                    while (!isEof() && braceDepth > 0) {
-                        Token bt = next();
-                        if (bt.type == TokenType::LeftBrace) braceDepth++;
-                        else if (bt.type == TokenType::RightBrace) braceDepth--;
-                    }
-                } else {
-                    // 单行 skinparam，吃掉整行
-                    while (!isEof() && peek().type != TokenType::Newline) next();
-                }
-            } else {
-                // 判断是否是 left to right direction
-                if (cmd == "left") {
-                    // 查看后两个 Token，是否为 to 和 right
-                    Token t2 = peek();
-                    if (t2.type == TokenType::Identifier && t2.value == "to") {
-                        ast->leftToRight = true;
-                    }
-                }
-                // left to right direction 等布局指令，吃掉整行
-                while (!isEof() && peek().type != TokenType::Newline) next();
-            }
-            continue;
-        }
-        
-        // 过滤 package 块声明，收集包ID与颜色
-        if (t.type == TokenType::Identifier && t.value == "package") {
-            next(); // 吃掉 package
-            QString pkgId = "";
-            QString pkgColor = "";
-            if (peek().type == TokenType::Identifier || peek().type == TokenType::String) {
-                pkgId = next().value; // 捕获包名 (Domain Layer 等)
-            }
-            if (peek().type == TokenType::Unknown && peek().value == "#") {
-                next(); // 吃掉 #
-                if (peek().type == TokenType::Identifier) {
-                    pkgColor = "#" + next().value; // 捕获具体颜色码 (e.g. fff7ed)
-                }
-            }
-            skipNewlines();
-            if (peek().type == TokenType::LeftBrace) {
-                next(); // 吃掉左括号 {
-                packageDepth++;
-                currentPackageId = pkgId;
-                
-                ClassDiagramAst::PackageDecl pkg;
-                pkg.id = pkgId;
-                pkg.displayName = pkgId;
-                pkg.color = pkgColor;
-                ast->packages.append(pkg);
-            }
-            continue;
-        }
-        
-        // 在外部顶层匹配并吃掉 package 的闭合大括号 }
-        if (t.type == TokenType::RightBrace && packageDepth > 0) {
-            next();
-            packageDepth--;
-            if (packageDepth == 0) {
-                currentPackageId = "";
-            }
-            continue;
-        }
-        
-        // 1. 解析 class/interface/enum 声明: class Name { members }
-        if (t.type == TokenType::Class) {
-            QString meta = t.value; // "class" / "interface" / "enum"
-            next(); // 吃掉关键字
-            
-            Token idToken = peek();
-            if (idToken.type != TokenType::Identifier) {
-                ParseError err;
-                err.location = idToken.location;
-                err.message = QString("%1 关键字后缺少名称标识符。").arg(meta);
-                errors.append(err);
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next(); // 吃名字
-            
-            QString classId = idToken.value;
-            QVector<QString> members;
-            
-            skipNewlines();
-            
-            // 优雅地忽略类名之后、大括号之前的 stereotype (<<...>>) 和颜色定义
-            while (!isEof() && peek().type != TokenType::LeftBrace && peek().type != TokenType::Newline) {
-                next(); // 吞掉修饰词
-            }
-            
-            skipNewlines();
-            
-            // 解析大括号内的成员
-            if (peek().type == TokenType::LeftBrace) {
-                next(); // 吃掉 {
-                
-                while (!isEof()) {
-                    skipNewlines();
-                    if (isEof()) break;
-                    
-                    if (peek().type == TokenType::RightBrace) {
-                        next(); // 吃掉 }
-                        break;
-                    }
-                    
-                    QString memberLine;
-                    SourceLocation memberLoc = peek().location;
-                    Q_UNUSED(memberLoc);
-                    
-                    // 抓取这一行直到 Newline
-                    while (!isEof() && peek().type != TokenType::Newline) {
-                        Token mt = next();
-                        QString piece = mt.value;
-                        
-                        // 对于没有普通 value 的特殊符号做反向恢复拼接
-                        if (piece.isEmpty()) {
-                            if (mt.type == TokenType::Colon) piece = ":";
-                            else if (mt.type == TokenType::Arrow) piece = "->";
-                            else if (mt.type == TokenType::DottedArrow) piece = "-->";
-                            else if (mt.type == TokenType::Inherit) piece = "<|--";
-                            else if (mt.type == TokenType::Composition) piece = "*--";
-                            else if (mt.type == TokenType::Aggregation) piece = "o--";
-                            else if (mt.type == TokenType::Realization) piece = "<|..";
-                            else if (mt.type == TokenType::Dependency) piece = "..>";
-                            else if (mt.type == TokenType::InheritRight) piece = "--|>";
-                            else if (mt.type == TokenType::RealizeRight) piece = "..|>";
-                            else if (mt.type == TokenType::LeftBrace) piece = "{";
-                            else if (mt.type == TokenType::RightBrace) piece = "}";
-                        }
-                        
-                        if (!memberLine.isEmpty() && !piece.startsWith('(') && !piece.startsWith(')')) {
-                            memberLine.append(" ");
-                        }
-                        memberLine.append(piece);
-                    }
-                    
-                    if (!memberLine.trimmed().isEmpty()) {
-                        members.append(memberLine.trimmed());
-                    }
-                }
-            }
-            
-            // 查重：若已经通过连线隐式声明过，则为其装载多行成员，否则新建
-            bool found = false;
-            for (auto &c : ast->classes) {
-                if (c.id == classId) {
-                    c.members = members;
-                    c.metaType = meta;
-                    c.packageName = currentPackageId;
-                    c.location = idToken.location;
-                    found = true;
-                    qDebug() << "[Parser] 更新已存在类声明:" << classId << "行号:" << c.location.line << "包:" << currentPackageId;
-                    break;
-                }
-            }
-            if (!found) {
-                ClassDecl decl;
-                decl.id = classId;
-                decl.metaType = meta;
-                decl.packageName = currentPackageId;
-                decl.members = members;
-                decl.location = idToken.location;
-                ast->classes.append(decl);
-                qDebug() << "[Parser] 显式解析到类声明:" << classId << "行号:" << decl.location.line << "包:" << currentPackageId;
-            }
-            continue;
-        }
-        
-        // 2. 解析类关系: ClassA <|-- ClassB : text 或 ClassA --> ClassB 等多种关系
-        if (t.type == TokenType::Identifier) {
-            Token fromToken = next();
-            
-            Token relToken = peek();
-            if (relToken.type != TokenType::Arrow && 
-                relToken.type != TokenType::DottedArrow && 
-                relToken.type != TokenType::Inherit &&
-                relToken.type != TokenType::Composition &&
-                relToken.type != TokenType::Aggregation &&
-                relToken.type != TokenType::Realization &&
-                relToken.type != TokenType::Dependency &&
-                relToken.type != TokenType::InheritRight &&
-                relToken.type != TokenType::RealizeRight) {
-                ParseError err;
-                err.location = relToken.location;
-                err.message = "期望的类关系连接符为 '<|--'、'<|..'、'*--'、'o--'、'..>'、'--|>'、'..|>' 或 '-->'/'->'。";
-                errors.append(err);
-                qDebug() << "[Parser] 关系连接符错误于第" << err.location.line << "行:" << err.message;
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next(); // 吃连线
-            
-            Token toToken = peek();
-            if (toToken.type != TokenType::Identifier) {
-                ParseError err;
-                err.location = toToken.location;
-                err.message = "关系连接符后缺少目标类名标识符。";
-                errors.append(err);
-                qDebug() << "[Parser] 缺少目标类名错误于第" << err.location.line << "行:" << err.message;
-                while (!isEof() && peek().type != TokenType::Newline) next();
-                continue;
-            }
-            next(); // 吃 to
-            
-            // 提取连线说明标签
-            QString labelText;
-            if (peek().type == TokenType::Colon) {
-                next(); // 吃冒号
-                if (peek().type == TokenType::String) {
-                    labelText = next().value;
-                }
-            }
-            
-            // 隐式补全两端的类声明
-            ensureClassExists(ast.get(), fromToken.value, fromToken.location);
-            ensureClassExists(ast.get(), toToken.value, toToken.location);
-            
-            RelationDecl rel;
-            rel.from = fromToken.value;
-            rel.to = toToken.value;
-            rel.text = labelText;
-            rel.direction = relToken.direction;
-            
-            if (relToken.type == TokenType::Inherit) {
-                rel.kind = RelationKind::Inheritance;
-            } else if (relToken.type == TokenType::Composition) {
-                rel.kind = RelationKind::Composition;
-            } else if (relToken.type == TokenType::Aggregation) {
-                rel.kind = RelationKind::Aggregation;
-            } else if (relToken.type == TokenType::Realization) {
-                rel.kind = RelationKind::Realization;
-            } else if (relToken.type == TokenType::Dependency) {
-                rel.kind = RelationKind::Dependency;
-            } else if (relToken.type == TokenType::InheritRight) {
-                rel.from = toToken.value; // 右向继承：对调归一化
-                rel.to = fromToken.value;
-                if (rel.direction == "up") rel.direction = "down";
-                else if (rel.direction == "down") rel.direction = "up";
-                else if (rel.direction == "left") rel.direction = "right";
-                else if (rel.direction == "right") rel.direction = "left";
-                rel.kind = RelationKind::Inheritance;
-            } else if (relToken.type == TokenType::RealizeRight) {
-                rel.from = toToken.value; // 右向实现：对调归一化
-                rel.to = fromToken.value;
-                if (rel.direction == "up") rel.direction = "down";
-                else if (rel.direction == "down") rel.direction = "up";
-                else if (rel.direction == "left") rel.direction = "right";
-                else if (rel.direction == "right") rel.direction = "left";
-                rel.kind = RelationKind::Realization;
-            } else {
-                rel.kind = RelationKind::Association;
-            }
-            
-            rel.location = relToken.location;
-            ast->relations.append(rel);
-            continue;
-        }
-        
-        ParseError err;
-        err.location = t.location;
-        err.message = QString("无法识别的 PlantUML 类图语法: '%1'。").arg(t.value);
-        errors.append(err);
-        qDebug() << "[Parser] 无法识别语法错误于第" << err.location.line << "行:" << err.message;
-        while (!isEof() && peek().type != TokenType::Newline) next();
-    }
-    
-    return ast;
-}
-
-void PumlParser::ensureClassExists(ClassDiagramAst *ast, const QString &id, const SourceLocation &loc)
-{
-    for (const auto &c : ast->classes) {
-        if (c.id == id) return;
-    }
-    ClassDecl decl;
-    decl.id = id;
-    decl.location = loc;
-    ast->classes.append(decl);
-    qDebug() << "[Parser] 关系中隐式创建类:" << id << "首次行号:" << loc.line;
 }

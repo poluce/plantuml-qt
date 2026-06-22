@@ -28,6 +28,8 @@ qt_add_executable(plantuml-qt
     src/parser/PumlLexer.cpp
     src/parser/PumlParser.h
     src/parser/PumlParser.cpp
+    src/parser/PumlHighlighter.h
+    src/parser/PumlHighlighter.cpp
 
     # AST 语义树
     src/ast/DiagramAst.h
@@ -77,3 +79,15 @@ target_link_libraries(plantuml-qt
         Qt6::Svg
         Qt6::SvgWidgets
 )
+
+# 添加解析器测试目标
+add_executable(test_parser
+    tests/test_parser.cpp
+    src/parser/SourceLocation.h
+    src/parser/ParseError.h
+    src/parser/PumlParser.h
+    src/parser/PumlParser.cpp
+    src/ast/DiagramAst.h
+)
+target_link_libraries(test_parser PRIVATE Qt6::Core)
+

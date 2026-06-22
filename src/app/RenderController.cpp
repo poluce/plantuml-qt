@@ -1,5 +1,4 @@
 #include "RenderController.h"
-#include "../parser/PumlLexer.h"
 #include "../parser/PumlParser.h"
 #include "../ast/DiagramAst.h"
 
@@ -23,15 +22,11 @@ void RenderController::doRender()
 {
     if (!m_scene) return;
     
-    // 1. 词法扫描分词
-    PumlLexer lexer(m_sourceText);
-    QVector<Token> tokens = lexer.tokenize();
-    
-    // 2. 语法解析生成 AST 并收集错误
-    PumlParser parser(tokens);
+    // 1. 语法解析生成 AST 并收集错误
+    PumlParser parser(m_sourceText);
     ParseResult parseResult = parser.parse();
     
-    // 3. 执行布局与图元生成 (容错设计：即使有非致命错，也尽量生成图形显示)
+    // 2. 执行布局与图元生成 (容错设计：即使有非致命错，也尽量生成图形显示)
     if (parseResult.ast) {
         RenderDocument doc = m_layoutEngine.layout(*parseResult.ast, m_theme);
         m_renderer.render(m_scene, doc, m_theme);
@@ -39,6 +34,6 @@ void RenderController::doRender()
         m_scene->clearDiagram();
     }
     
-    // 4. 将语法错误向上反馈给 MainWindow 界面展示
+    // 3. 将语法错误向上反馈给 MainWindow 界面展示
     emit renderFinished(parseResult.errors);
 }
