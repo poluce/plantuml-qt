@@ -56,22 +56,18 @@ void DiagramView::fitToContent()
 
 void DiagramView::wheelEvent(QWheelEvent *event)
 {
-    if (event->modifiers() & Qt::ControlModifier) {
-        double angle = event->angleDelta().y();
-        double factor = 1.15;
-        if (angle < 0) {
-            factor = 1.0 / factor;
-        }
-        
-        double currentScale = transform().m11();
-        // 限制缩放区间为 15% 到 800%
-        if ((factor > 1.0 && currentScale < 8.0) || (factor < 1.0 && currentScale > 0.15)) {
-            scale(factor, factor);
-        }
-        event->accept();
-    } else {
-        QGraphicsView::wheelEvent(event);
+    double angle = event->angleDelta().y();
+    double factor = 1.15;
+    if (angle < 0) {
+        factor = 1.0 / factor;
     }
+    
+    double currentScale = transform().m11();
+    // 限制缩放区间为 15% 到 800%
+    if ((factor > 1.0 && currentScale < 8.0) || (factor < 1.0 && currentScale > 0.15)) {
+        scale(factor, factor);
+    }
+    event->accept();
 }
 
 void DiagramView::drawBackground(QPainter *painter, const QRectF &rect)

@@ -10,6 +10,7 @@
 #include <QHash>
 #include <QPointer>
 #include <QVariantAnimation>
+#include <QFileSystemWatcher>
 #include "graphics/DiagramScene.h"
 #include "graphics/DiagramView.h"
 #include "app/RenderController.h"
@@ -20,6 +21,7 @@ struct OpenedFile
 {
     QString filePath;   // 本地绝对路径 (新建未保存文件则为空)
     QString content;    // 内存中的最新源码内容
+    bool isDeleted = false; // 是否在外部已被删除
 };
 
 class MainWindow : public QMainWindow
@@ -58,6 +60,9 @@ private slots:
     // 新增：导出布局反馈文件槽
     void exportLayoutFeedback();
 
+    // 响应外部文件变化槽
+    void onFileChanged(const QString &path);
+
 private:
     void setupUi();       // 构建三栏拉伸布局
     void setupStyles();   // 现代浅色主题 QSS
@@ -91,6 +96,9 @@ private:
     QHash<QListWidgetItem*, OpenedFile> m_files;
     QListWidgetItem *m_currentListItem; // 跟踪当前活跃的项目列表项
     bool m_pendingAutoFit = false;
+
+    // 外部文件系统监听器
+    QFileSystemWatcher *fileWatcher;
 
     // 滑动侧边栏动画控制
     bool m_editorVisible = false;

@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "parser/PumlHighlighter.h"
+#include <QThread>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -108,6 +109,9 @@ MainWindow::MainWindow(QWidget *parent)
             openedFile.content = content;
             m_files[item] = openedFile;
             
+            // 启用外部文件系统监控
+            fileWatcher->addPath(openedFile.filePath);
+            
             if (!firstLoadedItem) {
                 firstLoadedItem = item;
             }
@@ -125,6 +129,10 @@ MainWindow::MainWindow(QWidget *parent)
     
     // 初始状态下隐藏 UML 编辑框
     setEditorVisible(false, false);
+
+    // 初始化外部文件监视器并绑定信号槽
+    fileWatcher = new QFileSystemWatcher(this);
+    connect(fileWatcher, &QFileSystemWatcher::fileChanged, this, &MainWindow::onFileChanged);
 }
 
 MainWindow::~MainWindow()
@@ -401,7 +409,14 @@ void MainWindow::onOpenFileClicked()
     
     // 1. 查重逻辑：若该绝对路径已被导入打开，直接聚焦跳转
     for (auto it = m_files.begin(); it != m_files.end(); ++it) {
-        if (it.value().filePath == filePath) {
+        if (it.value().filePath == QFileInfo(filePath).absoluteFilePath()) {
+            // 如果此文件在外部被删除且现已恢复，重置其删除标志并重新启用监听
+            if (it.value().isDeleted) {
+                it.value().isDeleted = false;
+                it.key()->setText(QFileInfo(filePath).fileName());
+                it.key()->setForeground(QBrush());
+                fileWatcher->addPath(it.value().filePath);
+            }
             fileList->setCurrentItem(it.key());
             return;
         }
@@ -423,9 +438,12 @@ void MainWindow::onOpenFileClicked()
     QListWidgetItem *newItem = new QListWidgetItem(fileInfo.fileName(), fileList);
     
     OpenedFile openedFile;
-    openedFile.filePath = filePath;
+    openedFile.filePath = fileInfo.absoluteFilePath();
     openedFile.content = content;
     m_files[newItem] = openedFile;
+    
+    // 启用外部文件系统监控
+    fileWatcher->addPath(openedFile.filePath);
     
     // 4. 激活新打开的文件 (会自动切换至该项目并绘制)
     fileList->setCurrentItem(newItem);
@@ -681,4 +699,64 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::onFileChanged(const QString &path)
+{
+    QListWidgetItem *targetItem = nullptr;
+    for (auto it = m_files.begin(); it != m_files.end(); ++it) {
+        if (it.value().filePath == path) {
+            targetItem = it.key();
+            break;
+        }
+    }
+    
+    if (!targetItem) return;
+    
+    if (!QFile::exists(path)) {
+        // 文件已在外部被删除
+        m_files[targetItem].isDeleted = true;
+        targetItem->setText(QFileInfo(path).fileName() + tr(" (已在外部删除)"));
+        targetItem->setForeground(QBrush(QColor("#ef4444"))); // 使用淡红色高亮展示已删除状态
+        
+        // 从监听器中注销该物理路径的监听
+        fileWatcher->removePath(path);
+        return;
+    }
+    
+    // 外部文件被修改，读取新数据
+    QFile file(path);
+    // 尝试以 50ms 间隔至多重试 5 次，规避大部分外部编辑器写回时造成的瞬间独占锁
+    int retries = 5;
+    bool opened = false;
+    while (retries > 0) {
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            opened = true;
+            break;
+        }
+        QThread::msleep(50);
+        retries--;
+    }
+    
+    if (!opened) return;
+    
+    QTextStream in(&file);
+    QString newContent = in.readAll();
+    file.close();
+    
+    m_files[targetItem].content = newContent;
+    m_files[targetItem].isDeleted = false;
+    
+    // 恢复列表项状态样式
+    targetItem->setText(QFileInfo(path).fileName());
+    targetItem->setForeground(QBrush()); // 恢复默认前景色
+    
+    // 若当前编辑器展示的文件即为该发生变化的文件，实时同步渲染
+    if (m_currentListItem == targetItem) {
+        editor->blockSignals(true);
+        editor->setPlainText(newContent);
+        editor->blockSignals(false);
+        
+        renderController->setSourceText(newContent);
+    }
 }
