@@ -3,6 +3,7 @@
 #include "items/MessageArrowItem.h"
 #include "items/ClassBoxItem.h"
 #include "items/RelationItem.h"
+#include "items/NoteLineItem.h"
 #include "items/PackageGroupItem.h"
 
 void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc, const RenderTheme &theme)
@@ -25,7 +26,7 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
     // 1. 依次将计算好几何的图元渲染为 ParticipantItem 或 ClassBoxItem
     for (const auto &node : doc.nodes) {
         QGraphicsItem *item = nullptr;
-        if (node.kind == RenderNodeKind::ClassBox) {
+        if (node.kind == RenderNodeKind::ClassBox || node.kind == RenderNodeKind::Note) {
             item = new ClassBoxItem(node, theme);
         } else {
             item = new ParticipantItem(node, theme);
@@ -37,10 +38,25 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
         scene->registerItem(node.id, item);
     }
     
-    // 2. 依次将计算好几何的消息线生成 MessageArrowItem 或 RelationItem
+    // 2. 依次将计算好几何的消息线生成 MessageArrowItem、NoteLineItem 或 RelationItem
     for (const auto &edge : doc.edges) {
         QGraphicsItem *item = nullptr;
-        if (edge.kind == RenderEdgeKind::Inheritance || 
+        if (edge.kind == RenderEdgeKind::NoteRelation) {
+            auto *noteLine = new NoteLineItem(edge, theme);
+            
+            QGraphicsItem *fromNode = scene->itemBySemanticId(edge.fromNodeId);
+            QGraphicsItem *toNode = scene->itemBySemanticId(edge.toNodeId);
+            if (fromNode && toNode) {
+                noteLine->setNodes(fromNode, toNode);
+                if (auto *fromBox = dynamic_cast<ClassBoxItem*>(fromNode)) {
+                    fromBox->addEdge(noteLine);
+                }
+                if (auto *toBox = dynamic_cast<ClassBoxItem*>(toNode)) {
+                    toBox->addEdge(noteLine);
+                }
+            }
+            item = noteLine;
+        } else if (edge.kind == RenderEdgeKind::Inheritance || 
             edge.kind == RenderEdgeKind::Association ||
             edge.kind == RenderEdgeKind::Composition ||
             edge.kind == RenderEdgeKind::Aggregation ||

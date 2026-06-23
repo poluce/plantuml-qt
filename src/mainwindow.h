@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <QVariantAnimation>
 #include <QFileSystemWatcher>
+#include <QTabBar>
 #include "graphics/DiagramScene.h"
 #include "graphics/DiagramView.h"
 #include "app/RenderController.h"
@@ -37,7 +38,10 @@ private slots:
     void onTextChanged();
     
     // 编译渲染完毕槽
-    void onRenderFinished(const QVector<ParseError> &errors);
+    void onRenderFinished(const QStringList &titles, const QVector<ParseError> &errors);
+    
+    // 页签改变槽
+    void onTabChanged(int index);
     
     // 图元选中触发槽
     void onItemActivated(QString semanticId, SourceLocation location);
@@ -81,6 +85,7 @@ private:
     QPlainTextEdit *editor;
     
     // 右栏：视口
+    QTabBar *m_diagramTabBar;
     DiagramView *graphicsView;
     DiagramScene *graphicsScene;
     

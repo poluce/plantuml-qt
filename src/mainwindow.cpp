@@ -231,8 +231,22 @@ void MainWindow::setupUi()
     shadow->setOffset(4, 0);
     editor->setGraphicsEffect(shadow);
     
-    // 2.3 右侧栏：视口
-    splitter->addWidget(graphicsView);
+    // 2.3 右侧栏：视口与 Tab 页签栏
+    QWidget *rightContainer = new QWidget(this);
+    QVBoxLayout *rightLayout = new QVBoxLayout(rightContainer);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(0);
+
+    m_diagramTabBar = new QTabBar(rightContainer);
+    m_diagramTabBar->setDrawBase(false);
+    m_diagramTabBar->hide();
+
+    rightLayout->addWidget(m_diagramTabBar);
+    rightLayout->addWidget(graphicsView);
+
+    splitter->addWidget(rightContainer);
+    
+    connect(m_diagramTabBar, &QTabBar::currentChanged, this, &MainWindow::onTabChanged);
     
     // 设定初始分割比例：最左栏 150px，右栏占满整个视口空间
     QList<int> sizes;
@@ -250,6 +264,28 @@ void MainWindow::setupStyles()
         QSplitter::handle {
             background-color: #e5e7eb;
             width: 4px;
+        }
+        QTabBar {
+            background-color: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        QTabBar::tab {
+            background-color: transparent;
+            color: #71717a;
+            padding: 8px 16px;
+            font-weight: 500;
+            font-size: 13px;
+            border: none;
+            border-bottom: 2px solid transparent;
+        }
+        QTabBar::tab:hover {
+            color: #3f3f46;
+            background-color: #f4f4f5;
+        }
+        QTabBar::tab:selected {
+            color: #6366f1;
+            border-bottom: 2px solid #6366f1;
+            font-weight: bold;
         }
         QPlainTextEdit {
             background-color: #ffffff;
@@ -330,8 +366,27 @@ void MainWindow::onTextChanged()
     renderController->setSourceText(editor->toPlainText());
 }
 
-void MainWindow::onRenderFinished(const QVector<ParseError> &errors)
+void MainWindow::onRenderFinished(const QStringList &titles, const QVector<ParseError> &errors)
 {
+    // 1. 临时阻断信号，避免 clear() 或 addTab() 触发 currentChanged
+    m_diagramTabBar->blockSignals(true);
+    while (m_diagramTabBar->count() > 0) {
+        m_diagramTabBar->removeTab(0);
+    }
+    for (const auto &title : titles) {
+        m_diagramTabBar->addTab(title);
+    }
+    
+    // 若单图或无图，隐藏页签栏；多图时显示并选中第 0 页
+    if (titles.size() <= 1) {
+        m_diagramTabBar->hide();
+    } else {
+        m_diagramTabBar->setCurrentIndex(0);
+        m_diagramTabBar->show();
+    }
+    m_diagramTabBar->blockSignals(false);
+
+    // 2. 更新底部的语法错误/就绪状态显示
     if (errors.isEmpty()) {
         statusLabel->setText(tr("就绪"));
         statusLabel->setStyleSheet("color: #10b981; font-weight: bold;");
@@ -347,15 +402,22 @@ void MainWindow::onRenderFinished(const QVector<ParseError> &errors)
     }
 }
 
+void MainWindow::onTabChanged(int index)
+{
+    if (index >= 0) {
+        renderController->renderDiagramIndex(index);
+    }
+}
+
 void MainWindow::onItemActivated(QString semanticId, SourceLocation location)
 {
     qDebug() << "[MainWindow] 点击激活图元 ID:" << semanticId << "行号:" << location.line;
     
     if (location.line <= 0) return;
     
-    // 如果编辑器目前处于收起隐藏状态，双击/点击激活图元时自动将其滑动展开
+    // 只有在编辑器本身可见时，才执行代码高亮和聚焦。若处于隐藏收起状态，则不自动展开
     if (!m_editorVisible) {
-        setEditorVisible(true, true);
+        return;
     }
     
     QTextBlock block = findSemanticBlock(editor, semanticId);

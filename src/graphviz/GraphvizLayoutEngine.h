@@ -25,4 +25,14 @@ private:
     QSizeF measureClass(const ClassDecl &klass) const;
     RenderEdgeKind relationKindToRenderKind(RelationKind kind) const;
     QPainterPath pathFromPoints(const QVector<QPointF> &points) const;
+
+    const ClassDecl *findClassDecl(const DiagramAst &ast, const QString &classId) const;
+    QPointF calculatePortPoint(
+        const QString &nodeId,
+        const QString &portId,
+        const QHash<QString, GraphLayoutNode> &nodesById,
+        const DiagramAst &ast,
+        const QPointF &offset,
+        const QPointF &fallback,
+        const QString &otherNodeId) const;
 };

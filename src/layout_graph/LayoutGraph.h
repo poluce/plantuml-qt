@@ -30,12 +30,18 @@ struct LayoutEdge
     QString id;
     QString from;
     QString to;
+    QString fromPort;  // 子端口 (如类成员名)
+    QString toPort;    // 子端口 (如类成员名)
     QString label;
     RenderEdgeKind renderKind = RenderEdgeKind::Association;
     bool visible = true;
     bool constraint = true;
     SourceLocation location;
     QHash<QString, QString> attrs;
+
+    QString style;
+    QString taillabel;
+    QString headlabel;
 };
 
 struct LayoutCluster

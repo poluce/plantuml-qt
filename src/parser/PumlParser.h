@@ -11,13 +11,40 @@ struct ParseResult
 {
     std::unique_ptr<DiagramAst> ast; // 返回多态基类指针
     QVector<ParseError> errors;
+    QStringList traceLog;
 };
+
+struct DiagramBlock {
+    QString title;
+    QString content;
+    int startLine; // 在主文件中的 1-indexed 起始行号
+};
+
+QVector<DiagramBlock> splitDiagrams(const QString &sourceText);
 
 struct ParserContext
 {
     bool inClassBody = false;
     QString currentClassId;
     QVector<QString> packageStack; // 支持嵌套包的包名栈
+    
+    // 别名与真实类 ID 的映射缓存
+    QHash<QString, QString> aliasToId;
+
+    // 多行 Note 解析状态机
+    bool inNoteBody = false;
+    QString currentNoteText;
+    QString currentNoteBoundId;
+    QString currentNoteBoundMember; // 新增：当前多行 Note 绑定的成员
+    QString currentNotePos;
+    QString currentNoteId;
+    int noteStartLine = 0;
+
+    // 多行 Legend 解析状态机
+    bool inLegendBody = false;
+
+    // 多行块注释状态机
+    bool inCommentBlock = false;
 };
 
 // 抽象行命令基类
@@ -25,6 +52,7 @@ class LineCommand {
 public:
     virtual ~LineCommand() = default;
     virtual bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) = 0;
+    virtual QString name() const = 0;
 };
 
 class PumlParser

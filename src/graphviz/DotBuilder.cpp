@@ -15,7 +15,11 @@ QString DotBuilder::attrs(const QHash<QString, QString> &values) const
 {
     QStringList parts;
     for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
-        parts << QString("%1=%2").arg(it.key(), quote(it.value()));
+        if (it.key() == "label" && it.value().startsWith("<") && it.value().endsWith(">")) {
+            parts << QString("%1=%2").arg(it.key(), it.value());
+        } else {
+            parts << QString("%1=%2").arg(it.key(), quote(it.value()));
+        }
     }
     return parts.isEmpty() ? QString() : " [" + parts.join(", ") + "]";
 }
@@ -33,8 +37,13 @@ QString DotBuilder::build(const LayoutGraph &graph) const
     QSet<QString> clusteredNodes;
     for (const auto &cluster : graph.clusters) {
         dot += QString("  subgraph %1 {\n").arg(quote("cluster_" + cluster.id));
-        dot += QString("    graph [id=%1, label=%2, margin=\"18\", color=\"transparent\"];\n")
-                   .arg(quote(cluster.id), quote(cluster.label));
+        if (!cluster.color.isEmpty()) {
+            dot += QString("    graph [id=%1, label=%2, margin=\"18\", color=\"#cccccc\", bgcolor=%3];\n")
+                       .arg(quote(cluster.id), quote(cluster.label), quote(cluster.color));
+        } else {
+            dot += QString("    graph [id=%1, label=%2, margin=\"18\", color=\"transparent\"];\n")
+                       .arg(quote(cluster.id), quote(cluster.label));
+        }
         for (const auto &nodeId : cluster.nodeIds) {
             for (const auto &node : graph.nodes) {
                 if (node.id != nodeId) {
@@ -93,7 +102,15 @@ QString DotBuilder::build(const LayoutGraph &graph) const
             edgeAttrs["style"] = "invis";
             edgeAttrs["arrowhead"] = "none";
         }
-        dot += QString("  %1 -> %2%3;\n").arg(quote(edge.from), quote(edge.to), attrs(edgeAttrs));
+        QString fromStr = quote(edge.from);
+        if (!edge.fromPort.isEmpty()) {
+            fromStr += ":" + quote(edge.fromPort);
+        }
+        QString toStr = quote(edge.to);
+        if (!edge.toPort.isEmpty()) {
+            toStr += ":" + quote(edge.toPort);
+        }
+        dot += QString("  %1 -> %2%3;\n").arg(fromStr, toStr, attrs(edgeAttrs));
     }
 
     dot += "}\n";

@@ -6,11 +6,13 @@
 #include <QPointF>
 #include <QPainterPath>
 #include "../parser/SourceLocation.h"
+#include "../ast/DiagramAst.h"
 
 enum class RenderNodeKind
 {
     Participant,
-    ClassBox    // 新增: 类卡片盒子
+    ClassBox,    // 新增: 类卡片盒子
+    Note
 };
 
 struct RenderNode
@@ -19,10 +21,13 @@ struct RenderNode
     QString displayName;
     QRectF rect;
     double lifelineLength = 0.0; 
-    QVector<QString> members; // 新增: 类图属性与方法成员
+    QVector<ClassMember> members; // 类图属性与方法成员 (升级为 ClassMember)
     QString metaType = "class"; // class, interface, enum
     RenderNodeKind kind = RenderNodeKind::Participant;
     SourceLocation location;
+    
+    QString stereotype;
+    QString style;
 };
 
 enum class RenderEdgeKind
@@ -34,13 +39,16 @@ enum class RenderEdgeKind
     Aggregation, // 类聚合关系 (o--)
     Realization, // 类实现关系 (<|..)
     Dependency,  // 类依赖关系 (..>)
-    Association  // 类关联关系 (-->)
+    Association, // 类关联关系 (-->)
+    NoteRelation // 新增：Note 专属指向虚指示线
 };
 
 struct RenderEdge
 {
     QString fromNodeId;
     QString toNodeId;
+    QString fromPort; // 新增：起始端成员端口/成员名
+    QString toPort;   // 新增：终止端成员端口/成员名
     QString id;
     
     QPointF startPoint;
@@ -53,6 +61,10 @@ struct RenderEdge
     bool hasLabelPosition = false;
     RenderEdgeKind kind = RenderEdgeKind::SyncCall;
     SourceLocation location;
+
+    QString style;
+    QString taillabel;
+    QString headlabel;
 };
 
 struct RenderPackage

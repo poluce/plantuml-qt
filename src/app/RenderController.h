@@ -19,9 +19,12 @@ public:
     // 触发防抖更新
     void setSourceText(const QString &text);
 
+    // 渲染指定索引的图
+    void renderDiagramIndex(int index);
+
 signals:
-    // 解析与布局结束后通知界面，传递可能存在的语法错误
-    void renderFinished(const QVector<ParseError> &errors);
+    // 解析与布局结束后通知界面，传递标题列表与可能存在的语法错误
+    void renderFinished(const QStringList &titles, const QVector<ParseError> &errors);
 
 private slots:
     // 执行真正的渲染计算流程
@@ -35,4 +38,6 @@ private:
     
     GraphvizLayoutEngine m_layoutEngine;
     DiagramSceneRenderer m_renderer;
+
+    QVector<RenderDocument> m_renderedDocs; // 缓存各个子图的排版布局数据
 };

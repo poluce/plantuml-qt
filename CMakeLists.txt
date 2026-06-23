@@ -67,6 +67,8 @@ qt_add_executable(plantuml-qt
     src/graphics/items/ClassBoxItem.cpp
     src/graphics/items/RelationItem.h
     src/graphics/items/RelationItem.cpp
+    src/graphics/items/NoteLineItem.h
+    src/graphics/items/NoteLineItem.cpp
     src/graphics/items/PackageGroupItem.h
     src/graphics/items/PackageGroupItem.cpp
 )
@@ -88,6 +90,14 @@ add_executable(test_parser
     src/parser/PumlParser.h
     src/parser/PumlParser.cpp
     src/ast/DiagramAst.h
+    src/graphviz/DotBuilder.h
+    src/graphviz/DotBuilder.cpp
+    src/graphviz/GraphvizLayoutEngine.h
+    src/graphviz/GraphvizLayoutEngine.cpp
+    src/graphviz/DotJsonParser.h
+    src/graphviz/DotJsonParser.cpp
+    src/graphviz/DotProcessRunner.h
+    src/graphviz/DotProcessRunner.cpp
 )
-target_link_libraries(test_parser PRIVATE Qt6::Core)
+target_link_libraries(test_parser PRIVATE Qt6::Widgets)
 

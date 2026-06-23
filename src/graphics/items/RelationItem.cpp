@@ -9,13 +9,6 @@
 #include <qmath.h>
 
 namespace {
-    enum class BoxSide {
-        Top,
-        Bottom,
-        Left,
-        Right
-    };
-
     QPointF sideNormal(BoxSide side)
     {
         switch (side) {
@@ -292,17 +285,57 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     bool isSelected = option->state & QStyle::State_Selected;
     
     QColor lineColor = (isHovered || isSelected) ? QColor("#4f46e5") : m_theme.primaryColor;
-    
-    painter->save();
-    painter->setRenderHint(QPainter::Antialiasing, true);
-    
-    // 1. 判断并配置实线或虚线画笔样式
+    double penWidth = m_theme.lineWidth;
     Qt::PenStyle penStyle = Qt::SolidLine;
     if (m_edge.kind == RenderEdgeKind::Realization || m_edge.kind == RenderEdgeKind::Dependency) {
         penStyle = Qt::DashLine;
     }
+
+    // 解析自定义线条样式 style 字符串以覆盖默认值
+    QStringList parts = m_edge.style.split(QRegularExpression("[;,]"), Qt::SkipEmptyParts);
+    for (const auto &part : parts) {
+        QString trimmed = part.trimmed();
+        if (trimmed.isEmpty()) continue;
+
+        if (trimmed.startsWith("line:", Qt::CaseInsensitive)) {
+            QString col = trimmed.mid(5).trimmed();
+            if (QColor::isValidColorName(col) && !isHovered && !isSelected) {
+                lineColor = QColor(col);
+            }
+        } else if (trimmed.startsWith("color=", Qt::CaseInsensitive)) {
+            QString col = trimmed.mid(6).trimmed();
+            if (QColor::isValidColorName(col) && !isHovered && !isSelected) {
+                lineColor = QColor(col);
+            }
+        } else if (trimmed.startsWith('#')) {
+            if (QColor::isValidColorName(trimmed) && !isHovered && !isSelected) {
+                lineColor = QColor(trimmed);
+            }
+        }
+
+        if (trimmed.startsWith("line.dashed", Qt::CaseInsensitive)) {
+            penStyle = Qt::DashLine;
+        } else if (trimmed.startsWith("line.dotted", Qt::CaseInsensitive)) {
+            penStyle = Qt::DotLine;
+        } else if (trimmed == "dashed" || trimmed.contains("dashed", Qt::CaseInsensitive)) {
+            penStyle = Qt::DashLine;
+        } else if (trimmed == "dotted" || trimmed.contains("dotted", Qt::CaseInsensitive)) {
+            penStyle = Qt::DotLine;
+        }
+
+        if (trimmed.startsWith("thickness=", Qt::CaseInsensitive)) {
+            penWidth = trimmed.mid(10).toDouble();
+        } else if (trimmed.startsWith("penwidth=", Qt::CaseInsensitive)) {
+            penWidth = trimmed.mid(9).toDouble();
+        } else if (trimmed == "bold" || trimmed.contains("bold", Qt::CaseInsensitive)) {
+            penWidth *= 2.0;
+        }
+    }
     
-    QPen linePen(lineColor, m_theme.lineWidth, penStyle);
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    
+    QPen linePen(lineColor, penWidth, penStyle);
     painter->setPen(linePen);
     
     // 2. 根据起止端点几何夹角，计算自适应线身偏移，防止线段穿入三角/菱形图元内部
@@ -349,7 +382,7 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         drawRotatedArrow(painter, endDirTo, endAngle, m_edge.kind);
     }
     
-    // 4. 绘制可能存在的关系文本标签 (位于连线中点上方)
+    // 4. 绘制关系文本标签 (位于连线中点上方)
     if (!m_edge.label.isEmpty()) {
         painter->setPen(m_theme.onSurfaceMutedColor);
         QFont font = painter->font();
@@ -361,6 +394,46 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         
         QRectF labelRect(xMid - 60.0, yMid - 18.0, 120.0, 15.0);
         painter->drawText(labelRect, Qt::AlignCenter, m_edge.label);
+    }
+
+    // 5. 绘制多重度限定关联词 (taillabel / headlabel)
+    if (!m_edge.taillabel.isEmpty() || !m_edge.headlabel.isEmpty()) {
+        painter->save();
+        painter->setPen(m_theme.onSurfaceMutedColor);
+        QFont font = painter->font();
+        font.setPointSize(8);
+        painter->setFont(font);
+        
+        // taillabel (起点端)
+        if (!m_edge.taillabel.isEmpty() && m_edge.points.size() >= 2) {
+            QPointF p0 = m_edge.points.first();
+            QPointF p1 = m_edge.points[1];
+            QPointF v = p1 - p0;
+            double len = qSqrt(v.x() * v.x() + v.y() * v.y());
+            if (len > 0) {
+                QPointF dir = v / len;
+                QPointF normal(-dir.y(), dir.x());
+                QPointF pos = p0 + dir * 25.0 + normal * 12.0;
+                QRectF textRect(pos.x() - 40.0, pos.y() - 10.0, 80.0, 20.0);
+                painter->drawText(textRect, Qt::AlignCenter, m_edge.taillabel);
+            }
+        }
+
+        // headlabel (终点端)
+        if (!m_edge.headlabel.isEmpty() && m_edge.points.size() >= 2) {
+            QPointF pN = m_edge.points.last();
+            QPointF pN_1 = m_edge.points[m_edge.points.size() - 2];
+            QPointF v = pN - pN_1;
+            double len = qSqrt(v.x() * v.x() + v.y() * v.y());
+            if (len > 0) {
+                QPointF dir = v / len;
+                QPointF normal(-dir.y(), dir.x());
+                QPointF pos = pN - dir * 25.0 + normal * 12.0;
+                QRectF textRect(pos.x() - 40.0, pos.y() - 10.0, 80.0, 20.0);
+                painter->drawText(textRect, Qt::AlignCenter, m_edge.headlabel);
+            }
+        }
+        painter->restore();
     }
     
     painter->restore();
@@ -449,6 +522,7 @@ void RelationItem::setNodes(QGraphicsItem *fromNode, QGraphicsItem *toNode)
     m_toItem = toNode;
 }
 
+
 void RelationItem::trackNodes()
 {
     if (!m_fromItem || !m_toItem) {
@@ -467,8 +541,16 @@ void RelationItem::trackNodes()
     const double fromSlot = slotForRelation(fromBox, this, fromSide);
     const double toSlot = slotForRelation(toBox, this, toSide);
 
-    const QPointF bestFrom = rectSidePoint(rFrom, fromSide, fromSlot);
-    const QPointF bestTo = rectSidePoint(rTo, toSide, toSlot);
+    QPointF bestFrom = rectSidePoint(rFrom, fromSide, fromSlot);
+    QPointF bestTo = rectSidePoint(rTo, toSide, toSlot);
+
+    // 核心重构：将复杂的端口吸附点计算完全委派给 ClassBoxItem，实现高内聚
+    if (fromBox) {
+        bestFrom = fromBox->portPoint(m_edge.fromPort, bestFrom, fromSide);
+    }
+    if (toBox) {
+        bestTo = toBox->portPoint(m_edge.toPort, bestTo, toSide);
+    }
     
     m_edge.startPoint = bestFrom;
     m_edge.endPoint = bestTo;
