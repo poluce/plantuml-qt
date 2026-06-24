@@ -28,6 +28,10 @@ struct RenderNode
     
     QString stereotype;
     QString style;
+    
+    // 关联类虚拟节点追踪两端实体节点ID
+    QString assocFromNodeId;
+    QString assocToNodeId;
 };
 
 enum class RenderEdgeKind
@@ -41,7 +45,12 @@ enum class RenderEdgeKind
     Dependency,  // 类依赖关系 (..>)
     Association, // 类关联关系 (-->)
     NoteRelation, // 新增：Note 专属指向虚指示线
-    Nested       // 新增: 嵌套关系 (+--)
+    Nested,      // 新增: 嵌套关系 (+--)
+    AssociationLine, // 新增：无向普通关联线
+    Square,      // 新增：正方形关系
+    Cross,       // 新增：叉号关系
+    Crowfoot,    // 新增：鸟爪关系
+    Hat          // 新增：尖括号关系
 };
 
 struct RenderEdge

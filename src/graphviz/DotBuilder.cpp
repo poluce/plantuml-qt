@@ -1,6 +1,56 @@
 #include "DotBuilder.h"
 #include <QSet>
 #include <QStringList>
+#include <functional>
+#include <QHash>
+
+namespace {
+    struct ClusterTreeNode {
+        QString id;
+        QString label;
+        QString color;
+        QVector<QString> nodeIds;
+        QVector<ClusterTreeNode*> children;
+
+        ~ClusterTreeNode() {
+            qDeleteAll(children);
+        }
+    };
+
+    ClusterTreeNode* getOrCreateNode(const QString& fullPath, const QString& label, const QString& color,
+                                     QHash<QString, ClusterTreeNode*>& nodeMap, ClusterTreeNode* root)
+    {
+        if (nodeMap.contains(fullPath)) {
+            return nodeMap[fullPath];
+        }
+
+        int lastIdx = fullPath.lastIndexOf('.');
+        QString parentPath = "";
+        QString selfLabel = fullPath;
+        if (lastIdx != -1) {
+            parentPath = fullPath.left(lastIdx);
+            selfLabel = fullPath.mid(lastIdx + 1);
+        }
+
+        ClusterTreeNode* parentNode = nullptr;
+        if (parentPath.isEmpty()) {
+            parentNode = root;
+        } else {
+            int grandLastIdx = parentPath.lastIndexOf('.');
+            QString parentLabel = (grandLastIdx == -1) ? parentPath : parentPath.mid(grandLastIdx + 1);
+            parentNode = getOrCreateNode(parentPath, parentLabel, "", nodeMap, root);
+        }
+
+        ClusterTreeNode* newNode = new ClusterTreeNode();
+        newNode->id = fullPath;
+        newNode->label = label.isEmpty() ? selfLabel : label;
+        newNode->color = color;
+
+        parentNode->children.append(newNode);
+        nodeMap[fullPath] = newNode;
+        return newNode;
+    }
+}
 
 QString DotBuilder::quote(const QString &value) const
 {
@@ -34,36 +84,71 @@ QString DotBuilder::build(const LayoutGraph &graph) const
     dot += "  node [shape=box, margin=0, fixedsize=true, fontname=\"Arial\"];\n";
     dot += "  edge [fontname=\"Arial\"];\n";
 
-    QSet<QString> clusteredNodes;
+    ClusterTreeNode root;
+    root.id = "";
+    QHash<QString, ClusterTreeNode*> nodeMap;
+    nodeMap[""] = &root;
+
     for (const auto &cluster : graph.clusters) {
-        dot += QString("  subgraph %1 {\n").arg(quote("cluster_" + cluster.id));
-        if (!cluster.color.isEmpty()) {
-            dot += QString("    graph [id=%1, label=%2, margin=\"18\", color=\"#cccccc\", bgcolor=%3];\n")
-                       .arg(quote(cluster.id), quote(cluster.label), quote(cluster.color));
-        } else {
-            dot += QString("    graph [id=%1, label=%2, margin=\"18\", color=\"transparent\"];\n")
-                       .arg(quote(cluster.id), quote(cluster.label));
+        ClusterTreeNode* node = getOrCreateNode(cluster.id, cluster.label, cluster.color, nodeMap, &root);
+        if (!cluster.label.isEmpty()) {
+            node->label = cluster.label;
         }
-        for (const auto &nodeId : cluster.nodeIds) {
-            for (const auto &node : graph.nodes) {
-                if (node.id != nodeId) {
-                    continue;
+        if (!cluster.color.isEmpty()) {
+            node->color = cluster.color;
+        }
+        node->nodeIds = cluster.nodeIds;
+    }
+
+    QSet<QString> clusteredNodes;
+
+    std::function<void(const ClusterTreeNode*, int)> writeClusterNode;
+    writeClusterNode = [&](const ClusterTreeNode *node, int indentLevel) {
+        bool isRoot = node->id.isEmpty();
+        QString indent = QString(indentLevel * 2, ' ');
+        QString innerIndent = indent + "  ";
+
+        if (!isRoot) {
+            dot += QString("%1subgraph %2 {\n").arg(indent, quote("cluster_" + node->id));
+            if (!node->color.isEmpty()) {
+                dot += QString("%1graph [id=%2, label=%3, margin=\"18\", color=\"#cccccc\", bgcolor=%4];\n")
+                           .arg(innerIndent, quote(node->id), quote(node->label), quote(node->color));
+            } else {
+                dot += QString("%1graph [id=%2, label=%3, margin=\"18\", color=\"transparent\"];\n")
+                           .arg(innerIndent, quote(node->id), quote(node->label));
+            }
+
+            // 输出当前包内的类图元节点
+            for (const auto &nodeId : node->nodeIds) {
+                for (const auto &gNode : graph.nodes) {
+                    if (gNode.id != nodeId) continue;
+
+                    QHash<QString, QString> nodeAttrs = gNode.attrs;
+                    nodeAttrs["id"] = gNode.id;
+                    nodeAttrs["label"] = gNode.visible ? gNode.label : "";
+                    nodeAttrs["width"] = QString::number(qMax(1.0, gNode.size.width()) / 72.0, 'f', 4);
+                    nodeAttrs["height"] = QString::number(qMax(1.0, gNode.size.height()) / 72.0, 'f', 4);
+                    if (!gNode.visible) {
+                        nodeAttrs["style"] = "invis";
+                    }
+                    dot += QString("%1%2%3;\n").arg(innerIndent, quote(gNode.id), attrs(nodeAttrs));
+                    clusteredNodes.insert(gNode.id);
+                    break;
                 }
-                QHash<QString, QString> nodeAttrs = node.attrs;
-                nodeAttrs["id"] = node.id;
-                nodeAttrs["label"] = node.visible ? node.label : "";
-                nodeAttrs["width"] = QString::number(qMax(1.0, node.size.width()) / 72.0, 'f', 4);
-                nodeAttrs["height"] = QString::number(qMax(1.0, node.size.height()) / 72.0, 'f', 4);
-                if (!node.visible) {
-                    nodeAttrs["style"] = "invis";
-                }
-                dot += QString("    %1%2;\n").arg(quote(node.id), attrs(nodeAttrs));
-                clusteredNodes.insert(node.id);
-                break;
             }
         }
-        dot += "  }\n";
-    }
+
+        // 递归输出子 subgraph
+        for (const auto *child : node->children) {
+            writeClusterNode(child, isRoot ? indentLevel : indentLevel + 1);
+        }
+
+        if (!isRoot) {
+            dot += QString("%1}\n").arg(indent);
+        }
+    };
+
+    writeClusterNode(&root, 1);
 
     for (const auto &node : graph.nodes) {
         if (clusteredNodes.contains(node.id)) {

@@ -246,10 +246,46 @@ namespace {
         if (points.isEmpty()) {
             return path;
         }
-        path.moveTo(points.first());
-        for (int i = 1; i < points.size(); ++i) {
-            path.lineTo(points[i]);
+        
+        // 如果点数正好符合 B样条控制点数 3n + 1 (且大于 1)
+        if (points.size() > 1 && (points.size() - 1) % 3 == 0) {
+            path.moveTo(points.first());
+            int i = 1;
+            for (; i + 2 < points.size(); i += 3) {
+                path.cubicTo(points[i], points[i + 1], points[i + 2]);
+            }
+            return path;
         }
+        
+        // 否则，说明这是拖动时生成的普通折线点。
+        // 使用二次贝塞尔曲线在拐角处做圆润化平滑
+        path.moveTo(points.first());
+        double cornerRadius = 15.0; // 圆角半径
+        
+        for (int i = 1; i < points.size() - 1; ++i) {
+            QPointF p_prev = points[i - 1];
+            QPointF p_curr = points[i];
+            QPointF p_next = points[i + 1];
+            
+            // 计算向量
+            QPointF v1 = p_prev - p_curr;
+            QPointF v2 = p_next - p_curr;
+            
+            double len1 = qSqrt(v1.x() * v1.x() + v1.y() * v1.y());
+            double len2 = qSqrt(v2.x() * v2.x() + v2.y() * v2.y());
+            
+            if (len1 > 0 && len2 > 0) {
+                double r = qMin(cornerRadius, qMin(len1 / 2.0, len2 / 2.0));
+                QPointF p_a = p_curr + (v1 / len1) * r;
+                QPointF p_b = p_curr + (v2 / len2) * r;
+                
+                path.lineTo(p_a);
+                path.quadTo(p_curr, p_b);
+            } else {
+                path.lineTo(p_curr);
+            }
+        }
+        path.lineTo(points.last());
         return path;
     }
 }
@@ -261,9 +297,55 @@ RelationItem::RelationItem(const RenderEdge &edge, const RenderTheme &theme)
     , m_toItem(nullptr)
     , m_initialStart(edge.startPoint)
     , m_initialEnd(edge.endPoint)
+    , m_initialPoints(edge.points)
 {
     setAcceptHoverEvents(true);
     setFlag(QGraphicsItem::ItemIsSelectable, true);
+    resolveStyle();
+}
+
+void RelationItem::resolveStyle()
+{
+    m_resolvedColor = m_theme.primaryColor;
+    m_resolvedPenWidth = m_theme.lineWidth;
+    m_resolvedPenStyle = Qt::SolidLine;
+    if (m_edge.kind == RenderEdgeKind::Realization || m_edge.kind == RenderEdgeKind::Dependency) {
+        m_resolvedPenStyle = Qt::DashLine;
+    }
+
+    if (m_edge.style.isEmpty()) return;
+
+    QStringList parts = m_edge.style.split(QRegularExpression("[;,]"), Qt::SkipEmptyParts);
+    for (const auto &part : parts) {
+        QString trimmed = part.trimmed();
+        if (trimmed.isEmpty()) continue;
+
+        if (trimmed.startsWith("line:", Qt::CaseInsensitive)) {
+            QString col = trimmed.mid(5).trimmed();
+            if (QColor::isValidColorName(col)) m_resolvedColor = QColor(col);
+        } else if (trimmed.startsWith("color=", Qt::CaseInsensitive)) {
+            QString col = trimmed.mid(6).trimmed();
+            if (QColor::isValidColorName(col)) m_resolvedColor = QColor(col);
+        } else if (trimmed.startsWith('#')) {
+            if (QColor::isValidColorName(trimmed)) m_resolvedColor = QColor(trimmed);
+        }
+
+        if (trimmed.contains("dashed", Qt::CaseInsensitive) || trimmed.contains("line.dashed", Qt::CaseInsensitive)) {
+            m_resolvedPenStyle = Qt::DashLine;
+        } else if (trimmed.contains("dotted", Qt::CaseInsensitive) || trimmed.contains("line.dotted", Qt::CaseInsensitive)) {
+            m_resolvedPenStyle = Qt::DotLine;
+        } else if (trimmed.contains("solid", Qt::CaseInsensitive)) {
+            m_resolvedPenStyle = Qt::SolidLine;
+        }
+
+        if (trimmed.startsWith("thickness=", Qt::CaseInsensitive)) {
+            m_resolvedPenWidth = trimmed.mid(10).toDouble();
+        } else if (trimmed.startsWith("penwidth=", Qt::CaseInsensitive)) {
+            m_resolvedPenWidth = trimmed.mid(9).toDouble();
+        } else if (trimmed.contains("bold", Qt::CaseInsensitive)) {
+            m_resolvedPenWidth *= 2.0;
+        }
+    }
 }
 
 QRectF RelationItem::boundingRect() const
@@ -284,61 +366,19 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     bool isHovered = option->state & QStyle::State_MouseOver;
     bool isSelected = option->state & QStyle::State_Selected;
     
-    QColor lineColor = (isHovered || isSelected) ? QColor("#4f46e5") : m_theme.primaryColor;
-    double penWidth = m_theme.lineWidth;
-    Qt::PenStyle penStyle = Qt::SolidLine;
-    if (m_edge.kind == RenderEdgeKind::Realization || m_edge.kind == RenderEdgeKind::Dependency) {
-        penStyle = Qt::DashLine;
-    }
-
-    // 解析自定义线条样式 style 字符串以覆盖默认值
-    QStringList parts = m_edge.style.split(QRegularExpression("[;,]"), Qt::SkipEmptyParts);
-    for (const auto &part : parts) {
-        QString trimmed = part.trimmed();
-        if (trimmed.isEmpty()) continue;
-
-        if (trimmed.startsWith("line:", Qt::CaseInsensitive)) {
-            QString col = trimmed.mid(5).trimmed();
-            if (QColor::isValidColorName(col) && !isHovered && !isSelected) {
-                lineColor = QColor(col);
-            }
-        } else if (trimmed.startsWith("color=", Qt::CaseInsensitive)) {
-            QString col = trimmed.mid(6).trimmed();
-            if (QColor::isValidColorName(col) && !isHovered && !isSelected) {
-                lineColor = QColor(col);
-            }
-        } else if (trimmed.startsWith('#')) {
-            if (QColor::isValidColorName(trimmed) && !isHovered && !isSelected) {
-                lineColor = QColor(trimmed);
-            }
-        }
-
-        if (trimmed.startsWith("line.dashed", Qt::CaseInsensitive)) {
-            penStyle = Qt::DashLine;
-        } else if (trimmed.startsWith("line.dotted", Qt::CaseInsensitive)) {
-            penStyle = Qt::DotLine;
-        } else if (trimmed == "dashed" || trimmed.contains("dashed", Qt::CaseInsensitive)) {
-            penStyle = Qt::DashLine;
-        } else if (trimmed == "dotted" || trimmed.contains("dotted", Qt::CaseInsensitive)) {
-            penStyle = Qt::DotLine;
-        }
-
-        if (trimmed.startsWith("thickness=", Qt::CaseInsensitive)) {
-            penWidth = trimmed.mid(10).toDouble();
-        } else if (trimmed.startsWith("penwidth=", Qt::CaseInsensitive)) {
-            penWidth = trimmed.mid(9).toDouble();
-        } else if (trimmed == "bold" || trimmed.contains("bold", Qt::CaseInsensitive)) {
-            penWidth *= 2.0;
-        }
-    }
+    QColor lineColor = (isHovered || isSelected) ? QColor("#4f46e5") : m_resolvedColor;
+    double penWidth = (isHovered || isSelected) ? m_resolvedPenWidth + 1.0 : m_resolvedPenWidth;
+    Qt::PenStyle penStyle = m_resolvedPenStyle;
     
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
     
     QPen linePen(lineColor, penWidth, penStyle);
+    linePen.setCapStyle(Qt::RoundCap);
+    linePen.setJoinStyle(Qt::RoundJoin);
     painter->setPen(linePen);
     
-    // 2. 根据起止端点几何夹角，计算自适应线身偏移，防止线段穿入三角/菱形图元内部
+    // 1. 根据起止端点几何夹角，计算自适应线身偏移，防止线段穿入三角/菱形图元内部
     QPointF startDirFrom = m_edge.startPoint;
     QPointF startDirTo = m_edge.endPoint;
     QPointF endDirFrom = m_edge.startPoint;
@@ -352,37 +392,71 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     const double startAngle = qAtan2(startDirTo.y() - startDirFrom.y(), startDirTo.x() - startDirFrom.x());
     const double endAngle = qAtan2(endDirTo.y() - endDirFrom.y(), endDirTo.x() - endDirFrom.x());
     
-    QPointF startPt = m_edge.startPoint;
-    QPointF endPt = m_edge.endPoint;
-    
-    if (m_edge.kind == RenderEdgeKind::Inheritance || m_edge.kind == RenderEdgeKind::Realization) {
-        double arrowLen = m_theme.arrowSize + 2.0;
-        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * arrowLen;
-    } else if (m_edge.kind == RenderEdgeKind::Composition || m_edge.kind == RenderEdgeKind::Aggregation) {
-        double diamondLen = m_theme.arrowSize * 1.5;
-        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * diamondLen;
-    } else if (m_edge.kind == RenderEdgeKind::Nested) {
-        double nestedLen = 12.0;
-        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * nestedLen;
+    // 2. 线身路径缩进 (相邻控制点平移优化)
+    QVector<QPointF> drawPoints = m_edge.points;
+    if (drawPoints.size() >= 2) {
+        QPointF p0 = drawPoints.first();
+        QPointF p1 = drawPoints[1];
+        QPointF vStart = p1 - p0;
+        double lenStart = qSqrt(vStart.x() * vStart.x() + vStart.y() * vStart.y());
+        
+        QPointF pN = drawPoints.last();
+        QPointF pN_1 = drawPoints[drawPoints.size() - 2];
+        QPointF vEnd = pN - pN_1;
+        double lenEnd = qSqrt(vEnd.x() * vEnd.x() + vEnd.y() * vEnd.y());
+        
+        double L_start = 0.0;
+        double L_end = 0.0;
+        
+        if (m_edge.kind == RenderEdgeKind::Inheritance || m_edge.kind == RenderEdgeKind::Realization) {
+            L_start = m_theme.arrowSize + 2.0;
+        } else if (m_edge.kind == RenderEdgeKind::Composition || m_edge.kind == RenderEdgeKind::Aggregation) {
+            L_start = m_theme.arrowSize * 1.5;
+        } else if (m_edge.kind == RenderEdgeKind::Nested) {
+            L_start = 12.0;
+        } else if (m_edge.kind == RenderEdgeKind::Square) {
+            L_start = m_theme.arrowSize;
+        } else if (m_edge.kind == RenderEdgeKind::Crowfoot || m_edge.kind == RenderEdgeKind::Hat) {
+            L_start = m_theme.arrowSize;
+        } else if (m_edge.kind == RenderEdgeKind::Cross) {
+            L_start = 6.0;
+        }
+        
+        if (m_edge.kind == RenderEdgeKind::Association || m_edge.kind == RenderEdgeKind::Dependency) {
+            L_end = 1.0;
+        }
+        
+        if (lenStart > 0 && L_start > 0) {
+            QPointF T_start = vStart / lenStart;
+            QPointF deltaStart = T_start * L_start;
+            drawPoints[0] += deltaStart;
+            // 物理校准相邻点，保持 G1 切向连续性
+            drawPoints[1] += deltaStart;
+        }
+        
+        if (lenEnd > 0 && L_end > 0) {
+            QPointF T_end = vEnd / lenEnd;
+            QPointF deltaEnd = -T_end * L_end;
+            drawPoints[drawPoints.size() - 1] += deltaEnd;
+            drawPoints[drawPoints.size() - 2] += deltaEnd;
+        }
     }
     
-    // 绘制连线线身
-    if (m_edge.path.isEmpty()) {
-        painter->drawLine(startPt, endPt);
-    } else {
-        painter->drawPath(m_edge.path);
-    }
+    QPainterPath drawPath = buildPathFromPoints(drawPoints);
+    painter->drawPath(drawPath);
     
-    // 3. 在对应的端点上绘制矢量旋转对齐的 UML 箭头/符号
+    // 3. 绘制矢量旋转对齐的 UML 箭头/符号
     if (m_edge.kind == RenderEdgeKind::Inheritance || 
         m_edge.kind == RenderEdgeKind::Realization || 
         m_edge.kind == RenderEdgeKind::Composition || 
         m_edge.kind == RenderEdgeKind::Aggregation ||
-        m_edge.kind == RenderEdgeKind::Nested) {
-        // 源端（起点）绘制
+        m_edge.kind == RenderEdgeKind::Nested ||
+        m_edge.kind == RenderEdgeKind::Square ||
+        m_edge.kind == RenderEdgeKind::Cross ||
+        m_edge.kind == RenderEdgeKind::Crowfoot ||
+        m_edge.kind == RenderEdgeKind::Hat) {
         drawRotatedArrow(painter, m_edge.startPoint, startAngle, m_edge.kind);
-    } else {
-        // 宿端（终点）绘制
+    } else if (m_edge.kind != RenderEdgeKind::AssociationLine) {
         drawRotatedArrow(painter, endDirTo, endAngle, m_edge.kind);
     }
     
@@ -400,7 +474,7 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         painter->drawText(labelRect, Qt::AlignCenter, m_edge.label);
     }
 
-    // 5. 绘制多重度限定关联词 (taillabel / headlabel)
+    // 5. 绘制多重度限定关联词并处理碰撞反转退避
     if (!m_edge.taillabel.isEmpty() || !m_edge.headlabel.isEmpty()) {
         painter->save();
         painter->setPen(m_theme.onSurfaceMutedColor);
@@ -415,10 +489,40 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
             QPointF v = p1 - p0;
             double len = qSqrt(v.x() * v.x() + v.y() * v.y());
             if (len > 0) {
-                QPointF dir = v / len;
-                QPointF normal(-dir.y(), dir.x());
-                QPointF pos = p0 + dir * 25.0 + normal * 12.0;
-                QRectF textRect(pos.x() - 40.0, pos.y() - 10.0, 80.0, 20.0);
+                QPointF T = v / len;
+                QPointF N(-T.y(), T.x());
+                
+                double d_offset = 24.0;
+                double n_offset = 12.0;
+                
+                QFontMetrics fm(painter->font());
+                int w = fm.horizontalAdvance(m_edge.taillabel);
+                int h = fm.height();
+                
+                QPointF pos = p0 + T * d_offset + N * n_offset;
+                QRectF textRect(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                
+                if (m_fromItem) {
+                    QRectF fromRect = m_fromItem->sceneBoundingRect();
+                    if (auto *box = dynamic_cast<ClassBoxItem*>(m_fromItem)) {
+                        if (box->metaType() == "diamond" || box->metaType() == "<>" ||
+                            box->metaType() == "circle" || box->metaType() == "()") {
+                            fromRect = QRectF(p0.x() - 15.0, p0.y() - 15.0, 30.0, 30.0);
+                        }
+                    }
+                    if (textRect.intersects(fromRect)) {
+                        pos = p0 + T * d_offset - N * n_offset;
+                        textRect = QRectF(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                        
+                        int attempts = 0;
+                        while (textRect.intersects(fromRect) && attempts < 5) {
+                            d_offset += 15.0;
+                            pos = p0 + T * d_offset - N * n_offset;
+                            textRect = QRectF(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                            attempts++;
+                        }
+                    }
+                }
                 painter->drawText(textRect, Qt::AlignCenter, m_edge.taillabel);
             }
         }
@@ -430,10 +534,40 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
             QPointF v = pN - pN_1;
             double len = qSqrt(v.x() * v.x() + v.y() * v.y());
             if (len > 0) {
-                QPointF dir = v / len;
-                QPointF normal(-dir.y(), dir.x());
-                QPointF pos = pN - dir * 25.0 + normal * 12.0;
-                QRectF textRect(pos.x() - 40.0, pos.y() - 10.0, 80.0, 20.0);
+                QPointF T = v / len;
+                QPointF N(-T.y(), T.x());
+                
+                double d_offset = 24.0;
+                double n_offset = 12.0;
+                
+                QFontMetrics fm(painter->font());
+                int w = fm.horizontalAdvance(m_edge.headlabel);
+                int h = fm.height();
+                
+                QPointF pos = pN - T * d_offset + N * n_offset;
+                QRectF textRect(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                
+                if (m_toItem) {
+                    QRectF toRect = m_toItem->sceneBoundingRect();
+                    if (auto *box = dynamic_cast<ClassBoxItem*>(m_toItem)) {
+                        if (box->metaType() == "diamond" || box->metaType() == "<>" ||
+                            box->metaType() == "circle" || box->metaType() == "()") {
+                            toRect = QRectF(pN.x() - 15.0, pN.y() - 15.0, 30.0, 30.0);
+                        }
+                    }
+                    if (textRect.intersects(toRect)) {
+                        pos = pN - T * d_offset - N * n_offset;
+                        textRect = QRectF(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                        
+                        int attempts = 0;
+                        while (textRect.intersects(toRect) && attempts < 5) {
+                            d_offset += 15.0;
+                            pos = pN - T * d_offset - N * n_offset;
+                            textRect = QRectF(pos.x() - w / 2.0, pos.y() - h / 2.0, w, h);
+                            attempts++;
+                        }
+                    }
+                }
                 painter->drawText(textRect, Qt::AlignCenter, m_edge.headlabel);
             }
         }
@@ -499,6 +633,7 @@ void RelationItem::drawRotatedArrow(QPainter *painter, const QPointF &tip, doubl
         QPointF p1(-size, -size / 2.0);
         QPointF p2(-size, size / 2.0);
         
+        painter->setBrush(Qt::NoBrush);
         painter->drawLine(QPointF(0, 0), p1);
         painter->drawLine(QPointF(0, 0), p2);
     }
@@ -512,10 +647,34 @@ void RelationItem::drawRotatedArrow(QPainter *painter, const QPointF &tip, doubl
         painter->drawEllipse(circleRect);
         
         // 绘制加号
-        // 水平线：从 (3, 0) 到 (9, 0)
         painter->drawLine(QPointF(radius - 3.0, 0), QPointF(radius + 3.0, 0));
-        // 垂直线：从 (6, -3) 到 (6, 3)
         painter->drawLine(QPointF(radius, -3.0), QPointF(radius, 3.0));
+    }
+    else if (kind == RenderEdgeKind::Square) {
+        // 绘制方形。尖端在(0,0)，中心在 x = size/2，底边在 x = size。
+        QRectF rect(0.0, -size / 2.0, size, size);
+        painter->setBrush(QBrush(m_theme.surfaceColor));
+        painter->drawRect(rect);
+    }
+    else if (kind == RenderEdgeKind::Cross) {
+        // 绘制交叉叉号 X。
+        double offset = size / 2.0;
+        painter->setBrush(Qt::NoBrush);
+        painter->drawLine(QPointF(0, -offset), QPointF(size, offset));
+        painter->drawLine(QPointF(0, offset), QPointF(size, -offset));
+    }
+    else if (kind == RenderEdgeKind::Crowfoot) {
+        // 绘制三叉鸟爪 (Crowfoot)。
+        painter->setBrush(Qt::NoBrush);
+        painter->drawLine(QPointF(0, 0), QPointF(size, -size / 2.0));
+        painter->drawLine(QPointF(0, 0), QPointF(size, size / 2.0));
+        painter->drawLine(QPointF(size, -size / 2.0), QPointF(size, size / 2.0));
+    }
+    else if (kind == RenderEdgeKind::Hat) {
+        // 绘制尖括号 (Hat)。
+        painter->setBrush(Qt::NoBrush);
+        painter->drawLine(QPointF(0, 0), QPointF(size, -size / 2.0));
+        painter->drawLine(QPointF(0, 0), QPointF(size, size / 2.0));
     }
     painter->restore();
 }
@@ -548,6 +707,18 @@ void RelationItem::trackNodes()
         return;
     }
     
+    // 如果起止某一端是虚拟关联中点，首先更新该虚拟点的位置
+    if (auto *vFrom = dynamic_cast<ClassBoxItem*>(m_fromItem)) {
+        if (vFrom->node().metaType == "point") {
+            vFrom->updateAssocPosition();
+        }
+    }
+    if (auto *vTo = dynamic_cast<ClassBoxItem*>(m_toItem)) {
+        if (vTo->node().metaType == "point") {
+            vTo->updateAssocPosition();
+        }
+    }
+    
     prepareGeometryChange();
     
     QRectF rFrom = m_fromItem->sceneBoundingRect();
@@ -574,6 +745,44 @@ void RelationItem::trackNodes()
     m_edge.startPoint = bestFrom;
     m_edge.endPoint = bestTo;
 
+    // 如果原始连线包含 Graphviz 算出来的 B样条曲线控制点，采用高精曲线形变拉伸跟随，保留精美曲线风格
+    if (m_initialPoints.size() > 2) {
+        QPointF U = m_initialEnd - m_initialStart;
+        double len2_old = U.x() * U.x() + U.y() * U.y();
+        if (len2_old > 0.0) {
+            QPointF V = bestTo - bestFrom;
+            QPointF N_old(-U.y(), U.x());
+            double len2_N = N_old.x() * N_old.x() + N_old.y() * N_old.y();
+            QPointF N_new(-V.y(), V.x());
+            
+            QVector<QPointF> newPoints;
+            for (const auto &pOld : m_initialPoints) {
+                double t = ((pOld.x() - m_initialStart.x()) * U.x() + (pOld.y() - m_initialStart.y()) * U.y()) / len2_old;
+                double h = 0.0;
+                if (len2_N > 0.0) {
+                    h = ((pOld.x() - m_initialStart.x()) * N_old.x() + (pOld.y() - m_initialStart.y()) * N_old.y()) / len2_N;
+                }
+                QPointF pNew = bestFrom + t * V + h * N_new;
+                newPoints.append(pNew);
+            }
+            m_edge.points = newPoints;
+            m_edge.path = buildPathFromPoints(m_edge.points);
+            
+            // 更新关系文本标签位置 (置于新曲线中段控制点上方)
+            if (!m_edge.label.isEmpty()) {
+                const int labelIndex = qMax(0, (m_edge.points.size() - 2) / 2);
+                const QPointF a = m_edge.points[labelIndex];
+                const QPointF b = m_edge.points[qMin(labelIndex + 1, m_edge.points.size() - 1)];
+                m_edge.labelPosition = QPointF((a.x() + b.x()) / 2.0, (a.y() + b.y()) / 2.0 - 12.0);
+                m_edge.hasLabelPosition = true;
+            } else {
+                m_edge.hasLabelPosition = false;
+            }
+            update();
+            return; // 成功应用曲线拉伸，直接返回！
+        }
+    }
+
     QVector<QRectF> obstacles;
     QRectF extent = rFrom.united(rTo);
     if (scene()) {
@@ -582,6 +791,9 @@ void RelationItem::trackNodes()
                 continue;
             }
             if (auto *box = dynamic_cast<ClassBoxItem*>(item)) {
+                if (box->node().metaType == "point") {
+                    continue; // 虚拟交汇中点无实体，绝对不作为连线的障碍物避让，防碍拖拽随动时坐标重算错乱
+                }
                 QRectF rect = box->sceneRect().adjusted(-10.0, -10.0, 10.0, 10.0);
                 obstacles.append(rect);
                 extent = extent.united(rect);

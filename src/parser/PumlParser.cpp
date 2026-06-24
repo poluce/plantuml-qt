@@ -11,7 +11,21 @@ namespace {
         if (sym.contains("o--") || sym.contains("--o") || sym.contains("o-") || sym.contains("-o")) return RelationKind::Aggregation;
         if (sym.contains("..>") || sym.contains("<..") || sym.contains(".>")) return RelationKind::Dependency;
         if (sym.contains("()") || sym.contains("()-") || sym.contains("-()")) return RelationKind::Association;
-        return RelationKind::Association;
+        if (sym.contains("+--") || sym.contains("--+") ||
+            sym.contains("+-")  || sym.contains("-+")  ||
+            sym.contains("+..") || sym.contains("..+") ||
+            sym.contains("+.")  || sym.contains(".+")) {
+            return RelationKind::Nested;
+        }
+        if (sym.contains("#--") || sym.contains("--#") || sym.contains("#-") || sym.contains("-#")) return RelationKind::Square;
+        if (sym.contains("x--") || sym.contains("--x") || sym.contains("x-") || sym.contains("-x")) return RelationKind::Cross;
+        if (sym.contains("}--") || sym.contains("--{") || sym.contains("}-") || sym.contains("-{")) return RelationKind::Crowfoot;
+        if (sym.contains("^--") || sym.contains("--^") || sym.contains("^-") || sym.contains("-^")) return RelationKind::Hat;
+
+        if (sym.contains(">") || sym.contains("<")) {
+            return RelationKind::Association;
+        }
+        return RelationKind::AssociationLine;
     }
 
     QString normalizeDirection(const QString &dir) {
@@ -31,6 +45,102 @@ namespace {
         if (dir == "left") return "right";
         if (dir == "right") return "left";
         return dir;
+    }
+
+    // 提取类名中的泛型参数并进行归一化
+    void extractGenerics(const QString &rawId, QString &baseId, QString &generics)
+    {
+        QString clean = rawId.trimmed();
+        if (clean.startsWith('"') && clean.endsWith('"')) {
+            clean = clean.mid(1, clean.length() - 2).trimmed();
+        }
+        
+        QRegularExpression rx("^([^<]+)(?:<([^>]+)>)?$");
+        auto match = rx.match(clean);
+        if (match.hasMatch()) {
+            baseId = match.captured(1).trimmed();
+            generics = match.captured(2).trimmed();
+        } else {
+            baseId = clean;
+            generics = "";
+        }
+    }
+
+    // 将类名或别名解析为真实的类 ID
+    QString resolveClassId(const QString &rawId, const ParserContext &ctx) {
+        QString clean = rawId.trimmed();
+        if (clean.startsWith('"') && clean.endsWith('"')) {
+            clean = clean.mid(1, clean.length() - 2).trimmed();
+        }
+        if (ctx.aliasToId.contains(clean)) {
+            return ctx.aliasToId[clean];
+        }
+        QString baseId, generics;
+        extractGenerics(clean, baseId, generics);
+        if (ctx.aliasToId.contains(baseId)) {
+            return ctx.aliasToId[baseId];
+        }
+
+        // 1. 优先从内向外拼接当前包栈在已声明的 classes 里查找
+        for (int i = ctx.packageStack.size() - 1; i >= 0; --i) {
+            QString testId = ctx.packageStack[i] + "." + baseId;
+            if (ctx.declaredClasses.contains(testId)) {
+                return testId;
+            }
+        }
+        if (ctx.declaredClasses.contains(baseId)) {
+            return baseId;
+        }
+
+        // 2. 后缀模糊匹配：若在已声明的类中，有且仅有一个类以 "." + baseId 结尾或等于 baseId
+        QString matchedId;
+        int matchCount = 0;
+        for (const QString &declId : ctx.declaredClasses) {
+            if (declId == baseId || declId.endsWith("." + baseId)) {
+                matchedId = declId;
+                matchCount++;
+            }
+        }
+        if (matchCount == 1) {
+            return matchedId;
+        }
+
+        // 3. 若找不到且要新建，且 baseId 不包含 "."，则隐式创建当前作用域下的全限定类 ID
+        if (!ctx.packageStack.isEmpty() && !baseId.contains('.')) {
+            return ctx.packageStack.last() + "." + baseId;
+        }
+        return baseId;
+    }
+
+    // 从样式串中提取连线方向，并净化样式串
+    QString extractDirectionFromStyle(QString &style)
+    {
+        if (style.isEmpty()) return "";
+        
+        QString direction;
+        QStringList parts = style.split(';');
+        QStringList newParts;
+        
+        for (const QString &part : parts) {
+            QStringList tokens = part.split(',');
+            QStringList newTokens;
+            for (const QString &token : tokens) {
+                QString t = token.trimmed();
+                QString lower = t.toLower();
+                if (lower == "up" || lower == "down" || lower == "left" || lower == "right" ||
+                    lower == "u" || lower == "d" || lower == "l" || lower == "r") {
+                    direction = normalizeDirection(lower);
+                } else {
+                    newTokens << t;
+                }
+            }
+            if (!newTokens.isEmpty()) {
+                newParts << newTokens.join(",");
+            }
+        }
+        
+        style = newParts.join(";");
+        return direction;
     }
 
     ClassMember parseClassMember(const QString &line)
@@ -86,24 +196,34 @@ namespace {
             trimmed.replace("{abstract}", "");
         }
         trimmed = trimmed.trimmed();
+        m.cleanText = trimmed;
 
         return m;
     }
 
-    void splitIdAndMember(const QString &raw, QString &id, QString &member)
+    void splitIdAndMember(const QString &raw, QString &id, QString &member, const ParserContext &ctx)
     {
-        QString clean = raw;
+        QString clean = raw.trimmed();
         if (clean.startsWith('"') && clean.endsWith('"')) {
-            clean = clean.mid(1, clean.length() - 2);
+            clean = clean.mid(1, clean.length() - 2).trimmed();
         }
-        int idx = clean.indexOf("::");
-        if (idx != -1) {
-            id = clean.left(idx).trimmed();
-            member = clean.mid(idx + 2).trimmed();
-        } else {
-            id = clean.trimmed();
-            member = "";
+        clean.replace("::", ".");
+
+        int lastIdx = clean.lastIndexOf('.');
+        if (lastIdx != -1) {
+            QString leftPart = clean.left(lastIdx).trimmed();
+            QString rightPart = clean.mid(lastIdx + 1).trimmed();
+
+            QString resolvedLeft = resolveClassId(leftPart, ctx);
+            if (ctx.declaredClasses.contains(resolvedLeft)) {
+                id = leftPart;
+                member = rightPart;
+                return;
+            }
         }
+
+        id = clean;
+        member = "";
     }
 
     QString extractRelationStyle(QString &cleanLine)
@@ -122,7 +242,7 @@ namespace {
         }
         
         // 2. 提取连线行末尾的单行样式，如 A --> B #red;line.dashed
-        QRegularExpression tailStyleRx("\\s+#((?:line:[^\\s:]+|line\\.[^\\s:]+|text:[^\\s:]+|[0-9a-fA-F]{6}|\\w+)(?:;[^\\s:]*)*)\\s*(?=:|$)");
+        QRegularExpression tailStyleRx("\\s+#((?:line:[^\\s:;]+|line\\.[^\\s:;]+|text:[^\\s:;]+|[0-9a-fA-F]{6}|\\w+)(?:;[^\\s;]*)*)\\s*(?=:|$)");
         match = tailStyleRx.match(cleanLine);
         if (match.hasMatch()) {
             if (!style.isEmpty()) {
@@ -139,17 +259,18 @@ namespace {
 // ================= 各具体行解析命令实现 =================
 
 // 1. 全局配置/注释/起止指令
-// 1. 全局配置/注释/起止指令
 class SkinParamCommand : public LineCommand {
 public:
     QString name() const override { return "SkinParamCommand"; }
     SkinParamCommand() {
         m_regex = QRegularExpression("^(@startuml(?:\\s+.*)?|@enduml?|skinparam\\s+.*|left\\s+to\\s+right\\s+direction.*|top\\s+to\\s+bottom\\s+direction.*|set\\s+.*|page\\s+.*|stereotype\\s+.*)$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ctx);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
@@ -175,28 +296,33 @@ public:
     PackageCommand() {
         m_regex = QRegularExpression("^(?:package|namespace)\\s+(?:\"([^\"]+)\"|([^{\\s#]+))\\s*(?:<<[^>]+>>)?\\s*(#[^\\s{}#]+)?\\s*(\\{?)$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
         if (ast->isSequence()) return true; // 时序图直接跳过包处理
 
-        QString pkgId = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString pkgName = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString pkgColor = match.captured(3);
         bool hasBrace = (match.captured(4) == "{");
 
         ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
         
+        QString parentPath = ctx.packageStack.isEmpty() ? "" : ctx.packageStack.last();
+        QString fullPath = parentPath.isEmpty() ? pkgName : (parentPath + "." + pkgName);
+
         ClassDiagramAst::PackageDecl pkg;
-        pkg.id = pkgId;
-        pkg.displayName = pkgId;
+        pkg.id = fullPath;
+        pkg.displayName = pkgName;
         pkg.color = pkgColor;
         classAst->packages.append(pkg);
 
         if (hasBrace) {
-            ctx.packageStack.push_back(pkgId);
+            ctx.packageStack.push_back(fullPath);
         }
         return true;
     }
@@ -208,10 +334,12 @@ private:
 class RightBraceCommand : public LineCommand {
 public:
     QString name() const override { return "RightBraceCommand"; }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ast);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         if (line != "}") return false;
 
         if (ctx.inClassBody) {
@@ -229,14 +357,14 @@ class ClassDeclCommand : public LineCommand {
 public:
     QString name() const override { return "ClassDeclCommand"; }
     ClassDeclCommand() {
-        m_regex = QRegularExpression("^(abstract\\s+class|class|interface|enum|annotation|entity|abstract|struct|protocol|exception|metaclass|circle|\\(\\)|diamond|<>|json|object)\\s+(?:\"([^\"]+)\"|([^\"\\s{}]+))(?:\\s+as\\s+([^\"\\s{}]+))?\\s*(?:<<([^>]+)>>)?\\s*(#(?:line:[^;\\s{}#]+|back:[^;\\s{}#]+|header:[^;\\s{}#]+|[0-9a-fA-F]{6}|[^;\\s{}#]+))?\\s*(?:##\\[([^\\]]*)\\](\\w+|#[0-9a-fA-F]{6}|#\\w+))?\\s*([^;\\{\\n]*)?\\s*(?:;([^\\{\\n]*))?\\s*(\\{?)$");
+        m_regex = QRegularExpression("^(abstract\\s+class|class|interface|enum|annotation|entity|abstract|struct|protocol|exception|metaclass|circle|\\(\\)|diamond|<>|json|object)\\s+(?:\"([^\"]+)\"|([^\"\\s{}<]+(?:<[^>{}]+>)?))(?:\\s+as\\s+([^\"\\s{}]+))?\\s*(?:<<([^>]+)>>)?\\s*(#(?:line:[^;\\s{}#]+|back:[^;\\s{}#]+|header:[^;\\s{}#]+|[0-9a-fA-F]{6}|[^;\\s{}#]+))?\\s*(?:##\\[([^\\]]*)\\](\\w+|#[0-9a-fA-F]{6}|#\\w+))?\\s*([^;\\{\\n]*)?\\s*(?:;([^\\{\\n]*))?\\s*(\\{?)$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
         if (ast->isSequence()) {
-            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "时序图中不支持类声明语句。"});
+            errors.append({SourceLocation{lineNum, physicalCol, physicalLen}, "时序图中不支持类声明语句。"});
             return true;
         }
 
@@ -250,11 +378,36 @@ public:
         QString extraStyle = match.captured(10);
         bool hasBrace = (match.captured(11) == "{");
 
-        QString classId = rawClassId;
-        QString displayName = rawClassId;
+        // 预防未闭合的泛型参数错误
+        if (rawClassId.contains('<') && !rawClassId.contains('>')) {
+            errors.append({
+                SourceLocation{lineNum, physicalCol, physicalLen},
+                QString("语法错误：类泛型参数未闭合，缺少 '>'。")
+            });
+            return true;
+        }
+
+        QString baseId, generics;
+        extractGenerics(rawClassId, baseId, generics);
+
+        QString classId = baseId;
+        QString displayName = baseId;
+        
+        QString parentPath = ctx.packageStack.isEmpty() ? "" : ctx.packageStack.last();
+        QString fullClassId = parentPath.isEmpty() ? classId : (parentPath + "." + classId);
+        
         if (!alias.isEmpty()) {
             classId = alias;
-            ctx.aliasToId[alias] = rawClassId;
+            fullClassId = parentPath.isEmpty() ? classId : (parentPath + "." + classId);
+            ctx.aliasToId[alias] = fullClassId;
+            ctx.aliasToId[rawClassId] = fullClassId;
+            if (!generics.isEmpty()) {
+                ctx.aliasToId[baseId] = fullClassId;
+            }
+        } else {
+            if (!generics.isEmpty()) {
+                ctx.aliasToId[rawClassId] = fullClassId;
+            }
         }
 
         ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
@@ -262,7 +415,7 @@ public:
         // 查重并更新或新建
         ClassDecl* targetDecl = nullptr;
         for (auto &c : classAst->classes) {
-            if (c.id == classId) {
+            if (c.id == fullClassId) {
                 targetDecl = &c;
                 break;
             }
@@ -270,15 +423,17 @@ public:
 
         if (!targetDecl) {
             ClassDecl decl;
-            decl.id = classId;
-            decl.location = SourceLocation{lineNum, 1, (int)line.length()};
+            decl.id = fullClassId;
+            decl.location = SourceLocation{lineNum, physicalCol, physicalLen};
             classAst->classes.append(decl);
             targetDecl = &classAst->classes.last();
+            ctx.declaredClasses.insert(fullClassId);
         }
 
         targetDecl->metaType = meta;
         targetDecl->displayName = displayName;
-        targetDecl->location = SourceLocation{lineNum, 1, (int)line.length()};
+        targetDecl->generics = generics;
+        targetDecl->location = SourceLocation{lineNum, physicalCol, physicalLen};
         targetDecl->stereotype = stereotype;
 
         QStringList styles;
@@ -302,7 +457,7 @@ public:
 
         if (hasBrace) {
             ctx.inClassBody = true;
-            ctx.currentClassId = classId;
+            ctx.currentClassId = fullClassId;
         }
         return true;
     }
@@ -318,21 +473,23 @@ public:
         m_regex = QRegularExpression(
             "^(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 1, 2: from
             "(?:\\[([^\\]]*)\\])?\\s*"            // 3: fromQualifier
-            "(?:\"([^\"]*)\"\\s*)?"               // 4: fromMultiplicity
-            "([<*o#x^+|()<>{}._-]*[-.]+[<*o#x^+|()<>{}._-]*)" // 5: relSym
-            "(?:\\[(up|down|left|right|u|d|l|r)\\])?\\s*" // 6: direction
-            "(?:\"([^\"]*)\"\\s*)?"               // 7: toMultiplicity
-            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 8, 9: to
-            "(?:\\[([^\\]]*)\\])?\\s*"            // 10: toQualifier
-            "(?:\\s*:\\s*(.*))?$"                 // 11: text
+            "(?:(?:\"([^\"]*)\"|([0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?|\\*(?=\\s)))\\s*)?" // 4, 5: fromMultiplicity
+            "([<*o#x^+|()<>{}._-]*[-.]+[<*o#x^+|()<>{}._-]*)" // 6: relSym
+            "(?:\\[(up|down|left|right|u|d|l|r)\\])?\\s*" // 7: direction
+            "(?:(?:\"([^\"]*)\"|((?<=[\\s\\]])\\*(?=\\s)|[0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?))\\s*)?" // 8, 9: toMultiplicity
+            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 10, 11: to
+            "(?:\\[([^\\]]*)\\])?\\s*"            // 12: toQualifier
+            "(?:\\s*:\\s*(.*))?$"                 // 13: text
         );
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         
         QString cleanLine = line;
         QString style = extractRelationStyle(cleanLine);
+        QString styleDirection = extractDirectionFromStyle(style);
 
         auto match = m_regex.match(cleanLine);
         if (!match.hasMatch()) return false;
@@ -342,17 +499,25 @@ public:
 
         QString fromRaw = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString fromQualifier = match.captured(3);
-        QString fromMultiplicity = match.captured(4);
-        QString relSym = match.captured(5);
-        QString direction = normalizeDirection(match.captured(6));
-        QString toMultiplicity = match.captured(7);
-        QString toRaw = !match.captured(8).isEmpty() ? match.captured(8) : match.captured(9);
-        QString toQualifier = match.captured(10);
-        QString text = match.captured(11);
+        QString fromMultiplicity = !match.captured(4).isEmpty() ? match.captured(4) : match.captured(5);
+        QString relSym = match.captured(6);
+        QString direction = normalizeDirection(match.captured(7));
+        if (!styleDirection.isEmpty()) {
+            direction = styleDirection;
+        }
+        QString toMultiplicity = !match.captured(8).isEmpty() ? match.captured(8) : match.captured(9);
+        QString toRaw = !match.captured(10).isEmpty() ? match.captured(10) : match.captured(11);
+        QString toQualifier = match.captured(12);
+        QString text = match.captured(13);
 
         RelationDecl rel;
-        splitIdAndMember(fromRaw, rel.from, rel.fromMember);
-        splitIdAndMember(toRaw, rel.to, rel.toMember);
+        splitIdAndMember(fromRaw, rel.from, rel.fromMember, ctx);
+        splitIdAndMember(toRaw, rel.to, rel.toMember, ctx);
+        
+        // 联动去泛型与别名转换
+        rel.from = resolveClassId(rel.from, ctx);
+        rel.to = resolveClassId(rel.to, ctx);
+
         rel.fromQualifier = fromQualifier;
         rel.toQualifier = toQualifier;
         rel.fromMultiplicity = fromMultiplicity;
@@ -360,11 +525,20 @@ public:
         rel.direction = direction;
         rel.text = text;
         rel.kind = parseRelationKind(relSym);
-        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
-        rel.style = style;
+        rel.location = SourceLocation{lineNum, physicalCol, physicalLen};
+        QString finalStyle = style;
+        if (rel.kind == RelationKind::AssociationLine && relSym.contains('.')) {
+            if (finalStyle.isEmpty()) {
+                finalStyle = "dashed";
+            } else if (!finalStyle.contains("dashed")) {
+                finalStyle += ";dashed";
+            }
+        }
+        rel.style = finalStyle;
 
         // 处理右向关系，进行起止点及方向对调归一化
-        if (!relSym.startsWith("<") && (relSym.endsWith("|>") || relSym.endsWith(">"))) {
+        if ((!relSym.startsWith("<") && (relSym.endsWith("|>") || relSym.endsWith(">"))) ||
+            relSym.endsWith("#") || relSym.endsWith("x") || relSym.endsWith("{") || relSym.endsWith("^")) {
             std::swap(rel.from, rel.to);
             std::swap(rel.fromMember, rel.toMember);
             std::swap(rel.fromQualifier, rel.toQualifier);
@@ -387,20 +561,22 @@ public:
         m_regex = QRegularExpression(
             "^(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 1, 2: from
             "(?:\\[([^\\]]*)\\])?\\s*"            // 3: fromQualifier
-            "(?:\"([^\"]*)\"\\s*)?"               // 4: fromMultiplicity
-            "(-*)(up|down|left|right|u|d|l|r)(-*)(->|-)" // 5, 6, 7, 8: direction / relSym
-            "\\s*(?:\"([^\"]*)\"\\s*)?"           // 9: toMultiplicity
-            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 10, 11: to
-            "(?:\\[([^\\]]*)\\])?\\s*"            // 12: toQualifier
-            "(?:\\s*:\\s*(.*))?$"                 // 13: text
+            "(?:(?:\"([^\"]*)\"|([0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?|\\*(?=\\s)))\\s*)?" // 4, 5: fromMultiplicity
+            "(-*)(up|down|left|right|u|d|l|r)(-*)(->|-)" // 6, 7, 8, 9: direction / relSym
+            "\\s*(?:(?:\"([^\"]*)\"|((?<=[\\s\\]])\\*(?=\\s)|[0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?))\\s*)?" // 10, 11: toMultiplicity
+            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 12, 13: to
+            "(?:\\[([^\\]]*)\\])?\\s*"            // 14: toQualifier
+            "(?:\\s*:\\s*(.*))?$"                 // 15: text
         );
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
 
         QString cleanLine = line;
         QString style = extractRelationStyle(cleanLine);
+        QString styleDirection = extractDirectionFromStyle(style);
 
         auto match = m_regex.match(cleanLine);
         if (!match.hasMatch()) return false;
@@ -410,24 +586,32 @@ public:
 
         QString fromRaw = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString fromQualifier = match.captured(3);
-        QString fromMultiplicity = match.captured(4);
-        QString direction = normalizeDirection(match.captured(6));
-        QString toMultiplicity = match.captured(9);
-        QString toRaw = !match.captured(10).isEmpty() ? match.captured(10) : match.captured(11);
-        QString toQualifier = match.captured(12);
-        QString text = match.captured(13);
+        QString fromMultiplicity = !match.captured(4).isEmpty() ? match.captured(4) : match.captured(5);
+        QString direction = normalizeDirection(match.captured(7));
+        if (!styleDirection.isEmpty()) {
+            direction = styleDirection;
+        }
+        QString toMultiplicity = !match.captured(10).isEmpty() ? match.captured(10) : match.captured(11);
+        QString toRaw = !match.captured(12).isEmpty() ? match.captured(12) : match.captured(13);
+        QString toQualifier = match.captured(14);
+        QString text = match.captured(15);
 
         RelationDecl rel;
-        splitIdAndMember(fromRaw, rel.from, rel.fromMember);
-        splitIdAndMember(toRaw, rel.to, rel.toMember);
+        splitIdAndMember(fromRaw, rel.from, rel.fromMember, ctx);
+        splitIdAndMember(toRaw, rel.to, rel.toMember, ctx);
+        
+        // 联动去泛型与别名转换
+        rel.from = resolveClassId(rel.from, ctx);
+        rel.to = resolveClassId(rel.to, ctx);
+
         rel.fromQualifier = fromQualifier;
         rel.toQualifier = toQualifier;
         rel.fromMultiplicity = fromMultiplicity;
         rel.toMultiplicity = toMultiplicity;
         rel.direction = direction;
         rel.text = text;
-        rel.kind = RelationKind::Association;
-        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+        rel.kind = match.captured(9) == "-" ? RelationKind::AssociationLine : RelationKind::Association;
+        rel.location = SourceLocation{lineNum, physicalCol, physicalLen};
         rel.style = style;
 
         classAst->relations.append(rel);
@@ -445,20 +629,22 @@ public:
         m_regex = QRegularExpression(
             "^(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 1, 2: from
             "(?:\\[([^\\]]*)\\])?\\s*"            // 3: fromQualifier
-            "(?:\"([^\"]*)\"\\s*)?"               // 4: fromMultiplicity
-            "(\\.*)(up|down|left|right|u|d|l|r)(\\.*)(\\.>|\\.)" // 5, 6, 7, 8: direction / relSym
-            "\\s*(?:\"([^\"]*)\"\\s*)?"           // 9: toMultiplicity
-            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 10, 11: to
-            "(?:\\[([^\\]]*)\\])?\\s*"            // 12: toQualifier
-            "(?:\\s*:\\s*(.*))?$"                 // 13: text
+            "(?:(?:\"([^\"]*)\"|([0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?|\\*(?=\\s)))\\s*)?" // 4, 5: fromMultiplicity
+            "(\\.*)(up|down|left|right|u|d|l|r)(\\.*)(\\.>|\\.)" // 6, 7, 8, 9: direction / relSym
+            "\\s*(?:(?:\"([^\"]*)\"|((?<=[\\s\\]])\\*(?=\\s)|[0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?))\\s*)?" // 10, 11: toMultiplicity
+            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 12, 13: to
+            "(?:\\[([^\\]]*)\\])?\\s*"            // 14: toQualifier
+            "(?:\\s*:\\s*(.*))?$"                 // 15: text
         );
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
 
         QString cleanLine = line;
         QString style = extractRelationStyle(cleanLine);
+        QString styleDirection = extractDirectionFromStyle(style);
 
         auto match = m_regex.match(cleanLine);
         if (!match.hasMatch()) return false;
@@ -468,25 +654,50 @@ public:
 
         QString fromRaw = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString fromQualifier = match.captured(3);
-        QString fromMultiplicity = match.captured(4);
-        QString direction = normalizeDirection(match.captured(6));
-        QString toMultiplicity = match.captured(9);
-        QString toRaw = !match.captured(10).isEmpty() ? match.captured(10) : match.captured(11);
-        QString toQualifier = match.captured(12);
-        QString text = match.captured(13);
+        QString fromMultiplicity = !match.captured(4).isEmpty() ? match.captured(4) : match.captured(5);
+        QString direction = normalizeDirection(match.captured(7));
+        if (!styleDirection.isEmpty()) {
+            direction = styleDirection;
+        }
+        QString toMultiplicity = !match.captured(10).isEmpty() ? match.captured(10) : match.captured(11);
+        QString toRaw = !match.captured(12).isEmpty() ? match.captured(12) : match.captured(13);
+        QString toQualifier = match.captured(14);
+        QString text = match.captured(15);
 
         RelationDecl rel;
-        splitIdAndMember(fromRaw, rel.from, rel.fromMember);
-        splitIdAndMember(toRaw, rel.to, rel.toMember);
+        splitIdAndMember(fromRaw, rel.from, rel.fromMember, ctx);
+        splitIdAndMember(toRaw, rel.to, rel.toMember, ctx);
+        
+        // 联动去泛型与别名转换
+        rel.from = resolveClassId(rel.from, ctx);
+        rel.to = resolveClassId(rel.to, ctx);
+
         rel.fromQualifier = fromQualifier;
         rel.toQualifier = toQualifier;
         rel.fromMultiplicity = fromMultiplicity;
         rel.toMultiplicity = toMultiplicity;
         rel.direction = direction;
         rel.text = text;
-        rel.kind = RelationKind::Dependency;
-        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
-        rel.style = style;
+        if (match.captured(9) == ".") {
+            rel.kind = RelationKind::AssociationLine;
+            if (rel.style.isEmpty()) {
+                rel.style = "dashed";
+            } else if (!rel.style.contains("dashed")) {
+                rel.style += ";dashed";
+            }
+        } else {
+            rel.kind = RelationKind::Dependency;
+        }
+        rel.location = SourceLocation{lineNum, physicalCol, physicalLen};
+        QString finalStyle = style;
+        if (rel.kind == RelationKind::AssociationLine) {
+            if (finalStyle.isEmpty()) {
+                finalStyle = "dashed";
+            } else if (!finalStyle.contains("dashed")) {
+                finalStyle += ";dashed";
+            }
+        }
+        rel.style = finalStyle;
 
         classAst->relations.append(rel);
         return true;
@@ -503,20 +714,22 @@ public:
         m_regex = QRegularExpression(
             "^(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 1, 2: from
             "(?:\\[([^\\]]*)\\])?\\s*"            // 3: fromQualifier
-            "(?:\"([^\"]*)\"\\s*)?"               // 4: fromMultiplicity
-            "(?:((?:<\\||\\*|o)-*)(up|down|left|right|u|d|l|r)(-*)|(-*)(up|down|left|right|u|d|l|r)(-*\\|>))" // 5, 6, 7, 8, 9, 10, 11
-            "\\s*(?:\"([^\"]*)\"\\s*)?"           // 12: toMultiplicity
-            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 13, 14: to
-            "(?:\\[([^\\]]*)\\])?\\s*"            // 15: toQualifier
-            "(?:\\s*:\\s*(.*))?$"                 // 16: text
+            "(?:(?:\"([^\"]*)\"|([0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?|\\*(?=\\s)))\\s*)?" // 4, 5: fromMultiplicity
+            "(?:((?:<\\||\\*|o)-*)(up|down|left|right|u|d|l|r)(-*)|(-*)(up|down|left|right|u|d|l|r)(-*(?:\\|>|\\*|o)))" // 6, 7, 8, 9, 10, 11: direction/symbols
+            "\\s*(?:(?:\"([^\"]*)\"|((?<=[\\s\\]])\\*(?=\\s)|[0-9]+(?:\\.\\.[0-9*a-zA-Z]+)?))\\s*)?" // 12, 13: toMultiplicity
+            "(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*"  // 14, 15: to
+            "(?:\\[([^\\]]*)\\])?\\s*"            // 16: toQualifier
+            "(?:\\s*:\\s*(.*))?$"                 // 17: text
         );
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
 
         QString cleanLine = line;
         QString style = extractRelationStyle(cleanLine);
+        QString styleDirection = extractDirectionFromStyle(style);
 
         auto match = m_regex.match(cleanLine);
         if (!match.hasMatch()) return false;
@@ -526,28 +739,36 @@ public:
 
         QString fromRaw = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString fromQualifier = match.captured(3);
-        QString fromMultiplicity = match.captured(4);
+        QString fromMultiplicity = !match.captured(4).isEmpty() ? match.captured(4) : match.captured(5);
         
         QString symbolHead = match.captured(6);
         QString dir1 = match.captured(7);
         QString dir2 = match.captured(10);
         QString symbolTail = match.captured(11);
         
-        QString toMultiplicity = match.captured(12);
-        QString toRaw = !match.captured(13).isEmpty() ? match.captured(13) : match.captured(14);
-        QString toQualifier = match.captured(15);
-        QString text = match.captured(16);
+        QString toMultiplicity = !match.captured(12).isEmpty() ? match.captured(12) : match.captured(13);
+        QString toRaw = !match.captured(14).isEmpty() ? match.captured(14) : match.captured(15);
+        QString toQualifier = match.captured(16);
+        QString text = match.captured(17);
 
         RelationDecl rel;
-        splitIdAndMember(fromRaw, rel.from, rel.fromMember);
-        splitIdAndMember(toRaw, rel.to, rel.toMember);
+        splitIdAndMember(fromRaw, rel.from, rel.fromMember, ctx);
+        splitIdAndMember(toRaw, rel.to, rel.toMember, ctx);
+        
+        // 联动去泛型与别名转换
+        rel.from = resolveClassId(rel.from, ctx);
+        rel.to = resolveClassId(rel.to, ctx);
+
         rel.fromQualifier = fromQualifier;
         rel.toQualifier = toQualifier;
         rel.fromMultiplicity = fromMultiplicity;
         rel.toMultiplicity = toMultiplicity;
         rel.direction = normalizeDirection(!dir1.isEmpty() ? dir1 : dir2);
+        if (!styleDirection.isEmpty()) {
+            rel.direction = styleDirection;
+        }
         rel.text = text;
-        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+        rel.location = SourceLocation{lineNum, physicalCol, physicalLen};
         rel.style = style;
 
         if (symbolHead.startsWith("<|")) {
@@ -564,6 +785,10 @@ public:
             std::swap(rel.fromQualifier, rel.toQualifier);
             std::swap(rel.fromMultiplicity, rel.toMultiplicity);
             rel.direction = flipDirection(rel.direction);
+        } else if (symbolTail.endsWith("*")) {
+            rel.kind = RelationKind::Composition;
+        } else if (symbolTail.endsWith("o")) {
+            rel.kind = RelationKind::Aggregation;
         }
 
         classAst->relations.append(rel);
@@ -580,12 +805,12 @@ public:
     ParticipantCommand() {
         m_regex = QRegularExpression("^participant\\s+(?:\"([^\"]+)\"|(\\w+))(?:\\s+as\\s+(?:\"([^\"]+)\"|(\\w+)))?$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
         if (!ast->isSequence()) {
-            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "类图中不支持 participant 声明。"});
+            errors.append({SourceLocation{lineNum, physicalCol, physicalLen}, "类图中不支持 participant 声明。"});
             return true;
         }
 
@@ -617,7 +842,7 @@ public:
         ParticipantDecl decl;
         decl.id = id;
         decl.displayName = displayName;
-        decl.location = SourceLocation{lineNum, 1, (int)line.length()};
+        decl.location = SourceLocation{lineNum, physicalCol, physicalLen};
         seqAst->participants.append(decl);
         return true;
     }
@@ -630,14 +855,14 @@ class MessageCommand : public LineCommand {
 public:
     QString name() const override { return "MessageCommand"; }
     MessageCommand() {
-        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(->|-->)\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|(\\w+))\\s*(-(?:\\[[^\\]]*\\])?->|->|-->|\\.\\.(?:\\[[^\\]]*\\])?>)\\s*(?:\"([^\"]+)\"|(\\w+))(?:\\s*:\\s*(.*))?$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
         if (!ast->isSequence()) {
-            errors.append({SourceLocation{lineNum, 1, (int)line.length()}, "类图中不支持时序图消息关系。"});
+            errors.append({SourceLocation{lineNum, physicalCol, physicalLen}, "类图中不支持时序图消息关系。"});
             return true;
         }
 
@@ -652,8 +877,8 @@ public:
         stmt.from = fromVal;
         stmt.to = toVal;
         stmt.text = msgText;
-        stmt.kind = (arrowSym == "->") ? MessageKind::Sync : MessageKind::Reply;
-        stmt.location = SourceLocation{lineNum, 1, (int)line.length()};
+        stmt.kind = (arrowSym.startsWith('-') && arrowSym != "-->") ? MessageKind::Sync : MessageKind::Reply;
+        stmt.location = SourceLocation{lineNum, physicalCol, physicalLen};
         
         seqAst->statements.append(stmt);
         return true;
@@ -669,11 +894,13 @@ public:
     PreprocessCommand() {
         m_regex = QRegularExpression("^!.*$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ast);
         Q_UNUSED(ctx);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         return m_regex.match(line).hasMatch();
     }
 private:
@@ -687,11 +914,13 @@ public:
     TitleCommand() {
         m_regex = QRegularExpression("^title(?:\\s+(.*))?$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ast);
         Q_UNUSED(ctx);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         return m_regex.match(line).hasMatch();
     }
 private:
@@ -705,10 +934,12 @@ public:
     LegendCommand() {
         m_regex = QRegularExpression("^legend(?:\\s+(left|right|center))?$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ast);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         if (m_regex.match(line).hasMatch()) {
             ctx.inLegendBody = true;
             return true;
@@ -727,10 +958,12 @@ public:
         m_regex = QRegularExpression("^(hide|show|remove|restore)\\s+(.*)$", QRegularExpression::CaseInsensitiveOption);
         m_targetRegex = QRegularExpression("^(?:\"([^\"]+)\"|([^\\s{}#]+))$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ctx);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
 
@@ -763,8 +996,7 @@ public:
     AssociationClassCommand() {
         m_regex = QRegularExpression("^\\(\\s*(?:\"([^\"]+)\"|([^\\s,()]+))\\s*,\\s*(?:\"([^\"]+)\"|([^\\s,()]+))\\s*\\)\\s*(\\.\\.+|-+)\\s*(?:\"([^\"]+)\"|([^\\s,()]+))\\s*$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
@@ -773,10 +1005,14 @@ public:
         ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
 
         AssociationClassDecl assoc;
-        assoc.classA = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
-        assoc.classB = !match.captured(3).isEmpty() ? match.captured(3) : match.captured(4);
-        assoc.assocClass = !match.captured(6).isEmpty() ? match.captured(6) : match.captured(7);
-        assoc.location = SourceLocation{lineNum, 1, (int)line.length()};
+        QString rawA = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString rawB = !match.captured(3).isEmpty() ? match.captured(3) : match.captured(4);
+        QString rawAssoc = !match.captured(6).isEmpty() ? match.captured(6) : match.captured(7);
+
+        assoc.classA = resolveClassId(rawA, ctx);
+        assoc.classB = resolveClassId(rawB, ctx);
+        assoc.assocClass = resolveClassId(rawAssoc, ctx);
+        assoc.location = SourceLocation{lineNum, physicalCol, physicalLen};
 
         classAst->associationClasses.append(assoc);
         return true;
@@ -792,8 +1028,7 @@ public:
     ExtendsImplementsCommand() {
         m_regex = QRegularExpression("^(class|interface)\\s+(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s+(extends|implements)\\s+(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
-        Q_UNUSED(ctx);
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
@@ -806,10 +1041,10 @@ public:
         QString parentId = !match.captured(5).isEmpty() ? match.captured(5) : match.captured(6);
 
         RelationDecl rel;
-        rel.from = parentId;
-        rel.to = childId;
+        rel.from = resolveClassId(parentId, ctx);
+        rel.to = resolveClassId(childId, ctx);
         rel.kind = (relType == "extends") ? RelationKind::Inheritance : RelationKind::Realization;
-        rel.location = SourceLocation{lineNum, 1, (int)line.length()};
+        rel.location = SourceLocation{lineNum, physicalCol, physicalLen};
 
         classAst->relations.append(rel);
         return true;
@@ -825,10 +1060,12 @@ public:
     TogetherCommand() {
         m_regex = QRegularExpression("^together\\s*\\{?$", QRegularExpression::CaseInsensitiveOption);
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
         Q_UNUSED(ast);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         if (m_regex.match(line).hasMatch()) {
             if (line.contains("{")) {
                 ctx.packageStack.push_back("__together__");
@@ -848,10 +1085,11 @@ public:
     ClassStyleCommand() {
         m_regex = QRegularExpression("^(?:\"([^\"]+)\"|([^\"\\s{}]+))\\s*:\\s*\\[([^\\]]+)\\]$");
     }
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(lineNum);
-        Q_UNUSED(ctx);
         Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
         auto match = m_regex.match(line);
         if (!match.hasMatch()) return false;
         if (ast->isSequence()) return false;
@@ -859,9 +1097,11 @@ public:
         QString classId = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
         QString style = match.captured(3);
 
+        QString resolvedId = resolveClassId(classId, ctx);
+
         ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
         for (auto &c : classAst->classes) {
-            if (c.id == classId) {
+            if (c.id == resolvedId) {
                 if (!c.style.isEmpty()) {
                     c.style += ";";
                 }
@@ -874,8 +1114,48 @@ public:
 private:
     QRegularExpression m_regex;
 };
+// 13.7. 外部类成员定义命令 (如 ClassName : memberText)
+class ExternalMemberCommand : public LineCommand {
+public:
+    QString name() const override { return "ExternalMemberCommand"; }
+    ExternalMemberCommand() {
+        m_regex = QRegularExpression("^(?:\"([^\"]+)\"|([^\"\\s{}:]+))\\s*:\\s*(?!\\[)(.+)$");
+    }
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
+        Q_UNUSED(lineNum);
+        Q_UNUSED(errors);
+        Q_UNUSED(physicalCol);
+        Q_UNUSED(physicalLen);
+        auto match = m_regex.match(line);
+        if (!match.hasMatch()) return false;
+        if (ast->isSequence()) return false;
 
-// 14. 悬空 Note 与连线 Note 声明命令
+        QString classId = !match.captured(1).isEmpty() ? match.captured(1) : match.captured(2);
+        QString memberText = match.captured(3).trimmed();
+
+        if (memberText.isEmpty() || memberText.startsWith('[')) return false;
+
+        QString resolvedId = resolveClassId(classId, ctx);
+        ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
+        for (auto &c : classAst->classes) {
+            if (c.id == resolvedId) {
+                c.members.append(parseClassMember(memberText));
+                return true;
+            }
+        }
+        
+        ClassDecl decl;
+        decl.id = resolvedId;
+        decl.displayName = resolvedId;
+        decl.location = SourceLocation{lineNum, physicalCol, physicalLen};
+        decl.members.append(parseClassMember(memberText));
+        classAst->classes.append(decl);
+        return true;
+    }
+private:
+    QRegularExpression m_regex;
+};
+
 class NoteCommand : public LineCommand {
 public:
     QString name() const override { return "NoteCommand"; }
@@ -894,7 +1174,7 @@ public:
         m_rxMultiAttachedStart = QRegularExpression("^note\\s+(left|right|top|bottom)(?:\\s*(#\\S+))?\\s*$");
     }
 
-    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) override {
+    bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) override {
         Q_UNUSED(errors);
         ClassDiagramAst* classAst = static_cast<ClassDiagramAst*>(ast);
 
@@ -904,7 +1184,7 @@ public:
             NoteDecl note;
             note.id = match.captured(2);
             note.text = match.captured(1);
-            note.location = SourceLocation{lineNum, 1, (int)line.length()};
+            note.location = SourceLocation{lineNum, physicalCol, physicalLen};
             classAst->notes.append(note);
             return true;
         }
@@ -919,6 +1199,8 @@ public:
             ctx.currentNotePos.clear();
             ctx.currentNoteText.clear();
             ctx.noteStartLine = lineNum;
+            ctx.noteStartCol = physicalCol;
+            ctx.noteStartLen = physicalLen;
             return true;
         }
 
@@ -928,9 +1210,9 @@ public:
             NoteDecl note;
             note.position = normalizeDirection(match.captured(1));
             note.text = match.captured(3);
-            note.location = SourceLocation{lineNum, 1, (int)line.length()};
+            note.location = SourceLocation{lineNum, physicalCol, physicalLen};
             if (!classAst->relations.isEmpty()) {
-                note.boundToId = classAst->relations.last().from;
+                note.boundToId = resolveClassId(classAst->relations.last().from, ctx);
             }
             classAst->notes.append(note);
             return true;
@@ -944,11 +1226,13 @@ public:
             ctx.currentNoteBoundId.clear();
             ctx.currentNoteBoundMember.clear();
             if (!classAst->relations.isEmpty()) {
-                ctx.currentNoteBoundId = classAst->relations.last().from;
+                ctx.currentNoteBoundId = resolveClassId(classAst->relations.last().from, ctx);
             }
             ctx.currentNotePos = normalizeDirection(match.captured(1));
             ctx.currentNoteText.clear();
             ctx.noteStartLine = lineNum;
+            ctx.noteStartCol = physicalCol;
+            ctx.noteStartLen = physicalLen;
             return true;
         }
 
@@ -959,11 +1243,11 @@ public:
             note.position = normalizeDirection(match.captured(1));
             QString rawTarget = !match.captured(2).isEmpty() ? match.captured(2) : match.captured(3);
             QString targetId, targetMember;
-            splitIdAndMember(rawTarget, targetId, targetMember);
-            note.boundToId = targetId;
+            splitIdAndMember(rawTarget, targetId, targetMember, ctx);
+            note.boundToId = resolveClassId(targetId, ctx);
             note.boundToMember = targetMember;
             note.text = match.captured(5);
-            note.location = SourceLocation{lineNum, 1, (int)line.length()};
+            note.location = SourceLocation{lineNum, physicalCol, physicalLen};
             classAst->notes.append(note);
             return true;
         }
@@ -976,11 +1260,13 @@ public:
             ctx.currentNotePos = normalizeDirection(match.captured(1));
             QString rawTarget = !match.captured(2).isEmpty() ? match.captured(2) : match.captured(3);
             QString targetId, targetMember;
-            splitIdAndMember(rawTarget, targetId, targetMember);
-            ctx.currentNoteBoundId = targetId;
+            splitIdAndMember(rawTarget, targetId, targetMember, ctx);
+            ctx.currentNoteBoundId = resolveClassId(targetId, ctx);
             ctx.currentNoteBoundMember = targetMember;
             ctx.currentNoteText.clear();
             ctx.noteStartLine = lineNum;
+            ctx.noteStartCol = physicalCol;
+            ctx.noteStartLen = physicalLen;
             return true;
         }
 
@@ -990,7 +1276,7 @@ public:
             NoteDecl note;
             note.position = normalizeDirection(match.captured(1));
             note.text = match.captured(3);
-            note.location = SourceLocation{lineNum, 1, (int)line.length()};
+            note.location = SourceLocation{lineNum, physicalCol, physicalLen};
             if (!classAst->classes.isEmpty()) {
                 note.boundToId = classAst->classes.last().id;
             }
@@ -1011,6 +1297,8 @@ public:
             ctx.currentNotePos = normalizeDirection(match.captured(1));
             ctx.currentNoteText.clear();
             ctx.noteStartLine = lineNum;
+            ctx.noteStartCol = physicalCol;
+            ctx.noteStartLen = physicalLen;
             return true;
         }
 
@@ -1043,6 +1331,7 @@ ParseResult PumlParser::parse()
     // 1. 扫描所有非空行，判定图的类别 (Class 还是 Sequence)
     bool isClass = false;
     QStringList lines = m_sourceText.split('\n');
+    static const QRegularExpression commaInStyleRx(R"(-\[[^\]]*,[^\]]*\])");
     for (const auto &line : lines) {
         QString trimmed = line.trimmed();
         if (trimmed.isEmpty() || trimmed.startsWith('\'')) continue;
@@ -1060,7 +1349,17 @@ ParseResult PumlParser::parse()
             trimmed.contains("-up-") || trimmed.contains("-down-") ||
             trimmed.contains("-left-") || trimmed.contains("-right-") ||
             trimmed.contains("-u->") || trimmed.contains("-d->") ||
-            trimmed.contains("-l->") || trimmed.contains("-r->")) {
+            trimmed.contains("-l->") || trimmed.contains("-r->") ||
+            trimmed.contains("+--") || trimmed.contains("--+") ||
+            trimmed.contains("+-")  || trimmed.contains("-+")  ||
+            trimmed.contains("+..") || trimmed.contains("..+") ||
+            trimmed.contains("+.")  || trimmed.contains(".+")  ||
+            trimmed.contains("#line:") || trimmed.contains("line.") ||
+            trimmed.contains("thickness=") ||
+            trimmed.contains("-[dashed]") || trimmed.contains("-[dotted]") ||
+            trimmed.contains("-[bold]") || trimmed.contains("-[plain]") ||
+            trimmed.contains("-[hidden]") ||
+            commaInStyleRx.match(trimmed).hasMatch()) {
             isClass = true;
             break;
         }
@@ -1081,6 +1380,7 @@ ParseResult PumlParser::parse()
     ExtendsImplementsCommand extendsImpl;
     ClassStyleCommand classStyle;
     TogetherCommand together;
+    ExternalMemberCommand externalMember;
     SkinParamCommand skinParam;
     PackageCommand package;
     ClassDeclCommand classDecl;
@@ -1100,6 +1400,7 @@ ParseResult PumlParser::parse()
         &preprocess, &title, &legend, &control, &assocClass, &extendsImpl, &classStyle, &together,
         &skinParam, &package, &classDecl, 
         &stdRelation, &hyphenRelation, &dotRelation, &specialRelation,
+        &externalMember,
         &noteCommand,
         &rightBrace, &participant, &message
     };
@@ -1108,13 +1409,18 @@ ParseResult PumlParser::parse()
 
     // 3. 遍历各行进行模式扫描
     for (int i = 0; i < lines.size(); ++i) {
-        QString line = lines[i].trimmed();
-        if (line.isEmpty() || line.startsWith('\'')) {
-            result.traceLog.append(QString("Line %1: '%2' -> Skipped (Empty or Comment)").arg(i + 1).arg(line));
+        QString rawLine = lines[i];
+        if (rawLine.endsWith('\r')) {
+            rawLine.chop(1);
+        }
+        QString line = rawLine.trimmed();
+        
+        if (line.isEmpty()) {
+            result.traceLog.append(QString("Line %1: Skipped (Empty)").arg(i + 1));
             continue;
         }
 
-        // 特殊处理：多行块注释过滤 /' ... '/
+        // A. 优先处理多行块注释，防止闭合标记 '/ 被单行注释截获
         if (ctx.inCommentBlock) {
             result.traceLog.append(QString("Line %1: '%2' -> Skipped (Block Comment)").arg(i + 1).arg(line));
             if (line.contains("'/")) {
@@ -1129,6 +1435,20 @@ ParseResult PumlParser::parse()
             }
             continue;
         }
+
+        // B. 再处理单行注释
+        if (line.startsWith('\'')) {
+            result.traceLog.append(QString("Line %1: '%2' -> Skipped (Single Comment)").arg(i + 1).arg(line));
+            continue;
+        }
+
+        // 计算当前行物理定位参数
+        int leadingSpaces = 0;
+        while (leadingSpaces < rawLine.length() && rawLine[leadingSpaces].isSpace()) {
+            leadingSpaces++;
+        }
+        int physicalCol = leadingSpaces + 1;
+        int physicalLen = line.length();
 
         // 特殊处理：读取多行 Legend 块内部（直接忽略）
         if (ctx.inLegendBody) {
@@ -1151,7 +1471,7 @@ ParseResult PumlParser::parse()
                 note.boundToMember = ctx.currentNoteBoundMember;
                 note.position = ctx.currentNotePos;
                 note.text = ctx.currentNoteText;
-                note.location = SourceLocation{ctx.noteStartLine, 1, (int)line.length()};
+                note.location = SourceLocation{ctx.noteStartLine, ctx.noteStartCol, ctx.noteStartLen};
                 classAst->notes.append(note);
             } else {
                 if (!ctx.currentNoteText.isEmpty()) {
@@ -1183,7 +1503,7 @@ ParseResult PumlParser::parse()
         // 常规指令匹配
         bool matched = false;
         for (auto *cmd : commands) {
-            if (cmd->parse(line, i + 1, result.ast.get(), ctx, result.errors)) {
+            if (cmd->parse(line, i + 1, result.ast.get(), ctx, result.errors, physicalCol, physicalLen)) {
                 matched = true;
                 result.traceLog.append(QString("Line %1: '%2' -> Matched by %3").arg(i + 1).arg(line).arg(cmd->name()));
                 break;
@@ -1192,8 +1512,19 @@ ParseResult PumlParser::parse()
 
         if (!matched) {
             result.traceLog.append(QString("Line %1: '%2' -> FAILED to match").arg(i + 1).arg(line));
-            result.errors.append({SourceLocation{i + 1, 1, (int)line.length()}, QString("无法识别的 PlantUML 语法: '%1'。").arg(line)});
+            result.errors.append({SourceLocation{i + 1, physicalCol, physicalLen}, QString("无法识别的 PlantUML 语法: '%1'。").arg(line)});
         }
+    }
+
+    // EOF 终结性状态完整校验
+    if (ctx.inCommentBlock) {
+        result.errors.append({SourceLocation{(int)lines.size(), 1, 1}, "语法错误：多行块注释 /' 未闭合。"});
+    }
+    if (ctx.inNoteBody) {
+        result.errors.append({SourceLocation{ctx.noteStartLine, 1, 1}, "语法错误：多行 Note 块未闭合。"});
+    }
+    if (ctx.inClassBody) {
+        result.errors.append({SourceLocation{(int)lines.size(), 1, 1}, QString("语法错误：类 '%1' 的定义体大括号 '{' 未闭合。").arg(ctx.currentClassId)});
     }
 
     // 4. 时序图和类图的隐式实体关联补全
@@ -1226,6 +1557,15 @@ void PumlParser::ensureClassExists(ClassDiagramAst *ast, const QString &id, cons
     ClassDecl decl;
     decl.id = id;
     decl.location = loc;
+
+    int lastDot = id.lastIndexOf('.');
+    if (lastDot != -1) {
+        decl.packageName = id.left(lastDot);
+        decl.displayName = id.mid(lastDot + 1);
+    } else {
+        decl.displayName = id;
+    }
+
     ast->classes.append(decl);
 }
 

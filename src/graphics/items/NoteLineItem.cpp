@@ -2,6 +2,20 @@
 #include <QPainter>
 #include <QStyleOptionGraphicsItem>
 
+namespace {
+    BoxSide preferredSide(const QRectF &selfRect, const QRectF &otherRect)
+    {
+        QPointF selfCenter = selfRect.center();
+        QPointF otherCenter = otherRect.center();
+        double dx = otherCenter.x() - selfCenter.x();
+        double dy = otherCenter.y() - selfCenter.y();
+        if (qAbs(dx) >= qAbs(dy)) {
+            return dx >= 0.0 ? BoxSide::Right : BoxSide::Left;
+        }
+        return dy >= 0.0 ? BoxSide::Bottom : BoxSide::Top;
+    }
+}
+
 NoteLineItem::NoteLineItem(const RenderEdge &edge, const RenderTheme &theme)
     : m_edge(edge)
     , m_theme(theme)
@@ -59,13 +73,13 @@ void NoteLineItem::trackNodes()
     if (const auto *fromBox = dynamic_cast<const ClassBoxItem*>(m_fromItem)) {
         QRectF rFrom = m_fromItem->sceneBoundingRect();
         QRectF rTo = m_toItem->sceneBoundingRect();
-        BoxSide fromSide = (rTo.center().x() > rFrom.center().x()) ? BoxSide::Right : BoxSide::Left;
+        BoxSide fromSide = preferredSide(rFrom, rTo);
         bestFrom = fromBox->portPoint(m_edge.fromPort, bestFrom, fromSide);
     }
     if (const auto *toBox = dynamic_cast<const ClassBoxItem*>(m_toItem)) {
         QRectF rFrom = m_fromItem->sceneBoundingRect();
         QRectF rTo = m_toItem->sceneBoundingRect();
-        BoxSide toSide = (rFrom.center().x() > rTo.center().x()) ? BoxSide::Right : BoxSide::Left;
+        BoxSide toSide = preferredSide(rTo, rFrom);
         bestTo = toBox->portPoint(m_edge.toPort, bestTo, toSide);
     }
 

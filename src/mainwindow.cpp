@@ -76,52 +76,11 @@ MainWindow::MainWindow(QWidget *parent)
         setEditorVisible(!m_editorVisible, true);
     });
     
-    // 4. 尝试从本地探测并加载默认的测试用例文件，彻底清空 C++ 代码中的硬编码内容
-    QVector<QString> fileNames = {"untitled.puml", "class_diagram.puml"};
-    QListWidgetItem *firstLoadedItem = nullptr;
+    // 初始化外部文件监视器并绑定信号槽
+    fileWatcher = new QFileSystemWatcher(this);
+    connect(fileWatcher, &QFileSystemWatcher::fileChanged, this, &MainWindow::onFileChanged);
     
-    for (const auto &fileName : fileNames) {
-        QString resolvedPath = "";
-        QString content = "";
-        
-        QVector<QString> candidatePaths = {
-            fileName,
-            "../" + fileName,
-            QCoreApplication::applicationDirPath() + "/" + fileName,
-            QCoreApplication::applicationDirPath() + "/../" + fileName
-        };
-        
-        for (const auto &path : candidatePaths) {
-            QFile file(path);
-            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream in(&file);
-                content = in.readAll();
-                file.close();
-                resolvedPath = path;
-                break;
-            }
-        }
-        
-        if (!resolvedPath.isEmpty()) {
-            QListWidgetItem *item = new QListWidgetItem(fileName, fileList);
-            OpenedFile openedFile;
-            openedFile.filePath = QFileInfo(resolvedPath).absoluteFilePath();
-            openedFile.content = content;
-            m_files[item] = openedFile;
-            
-            // 启用外部文件系统监控
-            fileWatcher->addPath(openedFile.filePath);
-            
-            if (!firstLoadedItem) {
-                firstLoadedItem = item;
-            }
-        }
-    }
-    
-    // 激活第一个成功加载的文件 (这会自动触发 onCurrentFileChanged 进行首次解析绘制)
-    if (firstLoadedItem) {
-        fileList->setCurrentItem(firstLoadedItem);
-    }
+
     
     // 启用列表项的自定义右键菜单并绑定信号槽
     fileList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -129,10 +88,6 @@ MainWindow::MainWindow(QWidget *parent)
     
     // 初始状态下隐藏 UML 编辑框
     setEditorVisible(false, false);
-
-    // 初始化外部文件监视器并绑定信号槽
-    fileWatcher = new QFileSystemWatcher(this);
-    connect(fileWatcher, &QFileSystemWatcher::fileChanged, this, &MainWindow::onFileChanged);
 }
 
 MainWindow::~MainWindow()

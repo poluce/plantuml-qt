@@ -38,6 +38,7 @@ struct ClassMember
     bool isAbstract = false; // 是否是抽象成员 {abstract}
     bool isSeparator = false; // 是否是分割线 (如 "--", "..")
     QString separatorText;    // 分割线上的标题文本
+    QString cleanText;        // 净化后的文本 (如 "getName(): String")
 };
 
 struct ClassDecl
@@ -50,6 +51,7 @@ struct ClassDecl
     SourceLocation location;
     QString stereotype;         // 原型修饰标签，如 <<Serializable>>
     QString style;              // 自定义样式
+    QString generics;           // 泛型规范参数，例如 "T" 或 "K, V"
 };
 
 enum class RelationKind
@@ -60,7 +62,12 @@ enum class RelationKind
     Realization, // 实现关系 <|..
     Dependency,  // 依赖关系 ..>
     Association, // 关联关系 --> 或 ->
-    Nested       // 嵌套关系 +-
+    Nested,      // 嵌套关系 +-
+    AssociationLine, // 新增：无向普通关联线 (-- 或 ..)
+    Square,      // 新增：正方形关系 #--
+    Cross,       // 新增：叉号关系 x--
+    Crowfoot,    // 新增：鸟爪/多端关系 }--
+    Hat          // 新增：尖括号关系 ^--
 };
 
 struct RelationDecl

@@ -25,6 +25,7 @@ public:
 
     QString id() const { return m_node.id; }
     SourceLocation location() const { return m_node.location; }
+    QString metaType() const { return m_node.metaType; }
     QRectF sceneRect() const { return sceneBoundingRect(); }
 
     // 新增：布局反馈状态提取接口
@@ -41,6 +42,10 @@ public:
     void updateEdges(); // 暴露连线更新接口，用于整体移动时被父包图元调用
     const QVector<QGraphicsItem*> &edges() const { return m_edges; }
 
+    // 虚拟节点（metaType == "point"）关联跟随接口
+    void initAssociation(ClassBoxItem *fromItem, ClassBoxItem *toItem);
+    void updateAssocPosition();
+
 protected:
     QVariant itemChange(GraphicsItemChange change, const QVariant &value) override;
 
@@ -54,4 +59,11 @@ private:
     QColor m_borderColor;
     double m_penWidth;
     Qt::PenStyle m_penStyle;
+
+    // 虚拟节点跟随属性
+    ClassBoxItem *m_assocFromItem = nullptr;
+    ClassBoxItem *m_assocToItem = nullptr;
+    double m_assocT = 0.5;
+    QPointF m_assocD = QPointF(0, 0);
+    bool m_hasAssoc = false;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QVector>
+#include <QSet>
 #include <memory>
 #include <QString>
 #include <QRegularExpression>
@@ -31,6 +32,9 @@ struct ParserContext
     // 别名与真实类 ID 的映射缓存
     QHash<QString, QString> aliasToId;
 
+    // 已声明类 ID 的集合
+    QSet<QString> declaredClasses;
+
     // 多行 Note 解析状态机
     bool inNoteBody = false;
     QString currentNoteText;
@@ -39,6 +43,8 @@ struct ParserContext
     QString currentNotePos;
     QString currentNoteId;
     int noteStartLine = 0;
+    int noteStartCol = 1;
+    int noteStartLen = 0;
 
     // 多行 Legend 解析状态机
     bool inLegendBody = false;
@@ -51,7 +57,7 @@ struct ParserContext
 class LineCommand {
 public:
     virtual ~LineCommand() = default;
-    virtual bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors) = 0;
+    virtual bool parse(const QString &line, int lineNum, DiagramAst *ast, ParserContext &ctx, QVector<ParseError> &errors, int physicalCol, int physicalLen) = 0;
     virtual QString name() const = 0;
 };
 

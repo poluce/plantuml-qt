@@ -1,4 +1,6 @@
 #include "GraphvizLayoutEngine.h"
+#include <QFont>
+#include <QFontMetrics>
 #include <algorithm>
 #include <QDebug>
 #include <QHash>
@@ -7,6 +9,68 @@
 #include <QRegularExpression>
 
 namespace {
+    void applyRelationStyleToEdge(LayoutEdge &edge, const QString &styleStr, RelationKind kind)
+    {
+        if (kind == RelationKind::Realization || kind == RelationKind::Dependency) {
+            edge.attrs["style"] = "dashed";
+        }
+
+        if (styleStr.isEmpty()) {
+            return;
+        }
+
+        QStringList parts = styleStr.split(QRegularExpression("[,;]"), Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            QString trimmed = part.trimmed();
+            if (trimmed.isEmpty()) continue;
+
+            QString lower = trimmed.toLower();
+
+            if (lower.startsWith("line:") || lower.startsWith("#line:")) {
+                int colonIdx = trimmed.indexOf(':');
+                edge.attrs["color"] = trimmed.mid(colonIdx + 1).trimmed();
+            }
+            else if (lower.startsWith("line.color:") || lower.startsWith("#line.color:")) {
+                int colonIdx = trimmed.indexOf(':');
+                edge.attrs["color"] = trimmed.mid(colonIdx + 1).trimmed();
+            }
+            else if (lower.startsWith("color=")) {
+                int eqIdx = trimmed.indexOf('=');
+                edge.attrs["color"] = trimmed.mid(eqIdx + 1).trimmed();
+            }
+            else if (lower.startsWith("text:") || lower.startsWith("#text:")) {
+                int colonIdx = trimmed.indexOf(':');
+                edge.attrs["fontcolor"] = trimmed.mid(colonIdx + 1).trimmed();
+            }
+            else if (lower.startsWith("fontcolor=")) {
+                int eqIdx = trimmed.indexOf('=');
+                edge.attrs["fontcolor"] = trimmed.mid(eqIdx + 1).trimmed();
+            }
+            else if (lower == "line.dashed" || lower == "#line.dashed" || lower == "dashed") {
+                edge.attrs["style"] = "dashed";
+            }
+            else if (lower == "line.dotted" || lower == "#line.dotted" || lower == "dotted") {
+                edge.attrs["style"] = "dotted";
+            }
+            else if (lower == "line.solid" || lower == "#line.solid" || lower == "solid" || lower == "plain") {
+                edge.attrs["style"] = "solid";
+            }
+            else if (lower == "line.bold" || lower == "#line.bold" || lower == "bold") {
+                edge.attrs["penwidth"] = "2.5";
+            }
+            else if (lower.startsWith("thickness=") || lower.startsWith("penwidth=")) {
+                int eqIdx = trimmed.indexOf('=');
+                edge.attrs["penwidth"] = trimmed.mid(eqIdx + 1).trimmed();
+            }
+            else if (trimmed.startsWith('#')) {
+                edge.attrs["color"] = trimmed;
+            }
+            else {
+                edge.attrs["color"] = trimmed;
+            }
+        }
+    }
+
     QString sequenceNodeId(const QString &id)
     {
         return "seq_participant_" + id;
@@ -143,15 +207,81 @@ QSizeF GraphvizLayoutEngine::measureParticipant(const ParticipantDecl &participa
 
 QSizeF GraphvizLayoutEngine::measureClass(const ClassDecl &klass) const
 {
-    int maxChars = klass.displayName.isEmpty() ? klass.id.length() : klass.displayName.length();
-    for (const auto &member : klass.members) {
-        int len = member.isSeparator ? member.separatorText.length() + 8 : member.rawText.length();
-        maxChars = qMax(maxChars, len);
+    // 使用与 ClassBoxItem 相同的字体和度量规则
+    QFont nameFont("Arial", 10);
+    nameFont.setBold(true);
+    QFontMetrics fmName(nameFont);
+    
+    // 1. 类名区域宽度
+    double nameW = fmName.horizontalAdvance(klass.displayName.isEmpty() ? klass.id : klass.displayName);
+    double stereoW = 0.0;
+    if (!klass.stereotype.isEmpty()) {
+        QFont stereoFont("Arial", 8);
+        stereoFont.setItalic(true);
+        QFontMetrics fmStereo(stereoFont);
+        QString topText = klass.stereotype;
+        if (!topText.startsWith("<<")) topText = "<<" + topText;
+        if (!topText.endsWith(">>")) topText = topText + ">>";
+        stereoW = fmStereo.horizontalAdvance(topText);
+    } else if (klass.metaType == "interface" || klass.metaType == "enum") {
+        QFont stereoFont("Arial", 8);
+        stereoFont.setItalic(true);
+        QFontMetrics fmStereo(stereoFont);
+        QString topText = (klass.metaType == "interface") ? "<<interface>>" : "<<enumeration>>";
+        stereoW = fmStereo.horizontalAdvance(topText);
     }
-
-    const double width = qMax(160.0, maxChars * 7.5 + 36.0);
-    const double height = classHeaderHeight + 12.0 + qMax(1, klass.members.size()) * classMemberLineHeight;
-    return QSizeF(width, qMax(70.0, height));
+    double W_head = qMax(nameW, stereoW) + 48.0; // 48.0 包含 Spot 圆圈、左右内衬和间距
+    
+    // 2. 成员区域宽度和高度自适应计算
+    QFont memberFont("Arial", 9);
+    QFontMetrics fmMember(memberFont);
+    
+    QFont titleFont("Arial", 8);
+    titleFont.setItalic(true);
+    QFontMetrics fmTitle(titleFont);
+    
+    double maxMemberW = 0.0;
+    double totalMemberH = 0.0;
+    
+    for (const auto &member : klass.members) {
+        if (member.isSeparator) {
+            // 分隔线高度
+            totalMemberH += member.separatorText.isEmpty() ? 10.0 : 18.0;
+            // 分隔线宽度
+            if (!member.separatorText.isEmpty()) {
+                double sepW = fmTitle.horizontalAdvance(member.separatorText) + 20.0;
+                maxMemberW = qMax(maxMemberW, sepW);
+            }
+        } else {
+            // 普通成员高度
+            totalMemberH += 18.0;
+            // 普通成员宽度
+            QFont curFont = memberFont;
+            if (member.isStatic) curFont.setUnderline(true);
+            if (member.isAbstract) curFont.setItalic(true);
+            QFontMetrics fmCur(curFont);
+            
+            // 获取净化文本
+            QString cleanText = member.cleanText;
+            if (cleanText.isEmpty()) {
+                cleanText = member.rawText;
+                if (cleanText.startsWith('+') || cleanText.startsWith('-') || cleanText.startsWith('#') || cleanText.startsWith('~')) {
+                    cleanText = cleanText.mid(1).trimmed();
+                }
+                cleanText.replace("{static}", "");
+                cleanText.replace("{abstract}", "");
+                cleanText = cleanText.trimmed();
+            }
+            
+            double memberW = 10.0 + 16.0 + 4.0 + fmCur.horizontalAdvance(cleanText) + 10.0;
+            maxMemberW = qMax(maxMemberW, memberW);
+        }
+    }
+    
+    double W_min = qMax(160.0, qMax(W_head, maxMemberW));
+    double H_min = 35.0 + 12.0 + (klass.members.isEmpty() ? 18.0 : totalMemberH);
+    
+    return QSizeF(W_min, qMax(70.0, H_min));
 }
 
 LayoutGraph GraphvizLayoutEngine::buildSequenceGraph(const SequenceDiagramAst &ast) const
@@ -417,6 +547,8 @@ LayoutGraph GraphvizLayoutEngine::buildClassGraph(const ClassDiagramAst &ast) co
                 assocPoint.attrs["shape"] = "point";
                 assocPoint.attrs["width"] = "0";
                 assocPoint.attrs["height"] = "0";
+                assocPoint.attrs["assoc_from"] = edgeFrom;
+                assocPoint.attrs["assoc_to"] = edgeTo;
                 assocPoint.clusterId = assocPointCluster;
                 graph.nodes.append(assocPoint);
                 if (clusterIndexById.contains(assocPointCluster)) {
@@ -464,53 +596,8 @@ LayoutGraph GraphvizLayoutEngine::buildClassGraph(const ClassDiagramAst &ast) co
                 edgeB.attrs["labelfontsize"] = "9";
             }
 
-            auto applyStyle = [](LayoutEdge &e, const QString &styleStr) {
-                QStringList parts = styleStr.split(QRegularExpression("[,;]"), Qt::SkipEmptyParts);
-                for (const auto &part : parts) {
-                    QString trimmed = part.trimmed();
-                    if (trimmed.isEmpty()) continue;
-                    if (trimmed.startsWith("line:", Qt::CaseInsensitive)) {
-                        e.attrs["color"] = trimmed.mid(5).trimmed();
-                    } else if (trimmed.startsWith("text:", Qt::CaseInsensitive)) {
-                        e.attrs["fontcolor"] = trimmed.mid(5).trimmed();
-                    } else if (trimmed.startsWith("line.dashed", Qt::CaseInsensitive)) {
-                        e.attrs["style"] = "dashed";
-                    } else if (trimmed.startsWith("line.dotted", Qt::CaseInsensitive)) {
-                        e.attrs["style"] = "dotted";
-                    } else if (trimmed.startsWith("line.bold", Qt::CaseInsensitive)) {
-                        e.attrs["penwidth"] = "2.5";
-                    } else if (trimmed.startsWith("thickness=", Qt::CaseInsensitive)) {
-                        e.attrs["penwidth"] = trimmed.mid(10).trimmed();
-                    } else if (trimmed.startsWith("penwidth=", Qt::CaseInsensitive)) {
-                        e.attrs["penwidth"] = trimmed.mid(9).trimmed();
-                    } else if (trimmed.startsWith("color=", Qt::CaseInsensitive)) {
-                        e.attrs["color"] = trimmed.mid(6).trimmed();
-                    } else if (trimmed.startsWith("fontcolor=", Qt::CaseInsensitive)) {
-                        e.attrs["fontcolor"] = trimmed.mid(10).trimmed();
-                    } else if (trimmed == "dashed" || trimmed == "dotted") {
-                        e.attrs["style"] = trimmed;
-                    } else if (trimmed.startsWith('#')) {
-                        if (trimmed.startsWith("#line:", Qt::CaseInsensitive)) {
-                            e.attrs["color"] = trimmed.mid(6).trimmed();
-                        } else if (trimmed.startsWith("#text:", Qt::CaseInsensitive)) {
-                            e.attrs["fontcolor"] = trimmed.mid(6).trimmed();
-                        } else if (trimmed.startsWith("#line.dashed", Qt::CaseInsensitive)) {
-                            e.attrs["style"] = "dashed";
-                        } else if (trimmed.startsWith("#line.dotted", Qt::CaseInsensitive)) {
-                            e.attrs["style"] = "dotted";
-                        } else if (trimmed.startsWith("#line.bold", Qt::CaseInsensitive)) {
-                            e.attrs["penwidth"] = "2.5";
-                        } else {
-                            e.attrs["color"] = trimmed;
-                        }
-                    }
-                }
-            };
-
-            if (!relation.style.isEmpty()) {
-                applyStyle(edgeA, relation.style);
-                applyStyle(edgeB, relation.style);
-            }
+            applyRelationStyleToEdge(edgeA, relation.style, relation.kind);
+            applyRelationStyleToEdge(edgeB, relation.style, relation.kind);
             // 强行把 edgeA arrowhead 设为 none
             edgeA.attrs["arrowhead"] = "none";
 
@@ -555,48 +642,7 @@ LayoutGraph GraphvizLayoutEngine::buildClassGraph(const ClassDiagramAst &ast) co
             edge.location = relation.location;
             edge.attrs["dir"] = "none";
 
-            if (!relation.style.isEmpty()) {
-                QStringList parts = relation.style.split(QRegularExpression("[,;]"), Qt::SkipEmptyParts);
-                for (const auto &part : parts) {
-                    QString trimmed = part.trimmed();
-                    if (trimmed.isEmpty()) continue;
-                    if (trimmed.startsWith("line:", Qt::CaseInsensitive)) {
-                        edge.attrs["color"] = trimmed.mid(5).trimmed();
-                    } else if (trimmed.startsWith("text:", Qt::CaseInsensitive)) {
-                        edge.attrs["fontcolor"] = trimmed.mid(5).trimmed();
-                    } else if (trimmed.startsWith("line.dashed", Qt::CaseInsensitive)) {
-                        edge.attrs["style"] = "dashed";
-                    } else if (trimmed.startsWith("line.dotted", Qt::CaseInsensitive)) {
-                        edge.attrs["style"] = "dotted";
-                    } else if (trimmed.startsWith("line.bold", Qt::CaseInsensitive)) {
-                        edge.attrs["penwidth"] = "2.5";
-                    } else if (trimmed.startsWith("thickness=", Qt::CaseInsensitive)) {
-                        edge.attrs["penwidth"] = trimmed.mid(10).trimmed();
-                    } else if (trimmed.startsWith("penwidth=", Qt::CaseInsensitive)) {
-                        edge.attrs["penwidth"] = trimmed.mid(9).trimmed();
-                    } else if (trimmed.startsWith("color=", Qt::CaseInsensitive)) {
-                        edge.attrs["color"] = trimmed.mid(6).trimmed();
-                    } else if (trimmed.startsWith("fontcolor=", Qt::CaseInsensitive)) {
-                        edge.attrs["fontcolor"] = trimmed.mid(10).trimmed();
-                    } else if (trimmed == "dashed" || trimmed == "dotted") {
-                        edge.attrs["style"] = trimmed;
-                    } else if (trimmed.startsWith('#')) {
-                        if (trimmed.startsWith("#line:", Qt::CaseInsensitive)) {
-                            edge.attrs["color"] = trimmed.mid(6).trimmed();
-                        } else if (trimmed.startsWith("#text:", Qt::CaseInsensitive)) {
-                            edge.attrs["fontcolor"] = trimmed.mid(6).trimmed();
-                        } else if (trimmed.startsWith("#line.dashed", Qt::CaseInsensitive)) {
-                            edge.attrs["style"] = "dashed";
-                        } else if (trimmed.startsWith("#line.dotted", Qt::CaseInsensitive)) {
-                            edge.attrs["style"] = "dotted";
-                        } else if (trimmed.startsWith("#line.bold", Qt::CaseInsensitive)) {
-                            edge.attrs["penwidth"] = "2.5";
-                        } else {
-                            edge.attrs["color"] = trimmed;
-                        }
-                    }
-                }
-            }
+            applyRelationStyleToEdge(edge, relation.style, relation.kind);
             graph.edges.append(edge);
         }
     }
@@ -719,6 +765,8 @@ LayoutGraph GraphvizLayoutEngine::buildClassGraph(const ClassDiagramAst &ast) co
         assocPoint.attrs["shape"] = "point";
         assocPoint.attrs["width"] = "0";
         assocPoint.attrs["height"] = "0";
+        assocPoint.attrs["assoc_from"] = assocInfos[k].classA;
+        assocPoint.attrs["assoc_to"] = assocInfos[k].classB;
         assocPoint.clusterId = assocPointCluster;
         graph.nodes.append(assocPoint);
         if (clusterIndexById.contains(assocPointCluster)) {
@@ -776,6 +824,11 @@ RenderEdgeKind GraphvizLayoutEngine::relationKindToRenderKind(RelationKind kind)
     case RelationKind::Dependency: return RenderEdgeKind::Dependency;
     case RelationKind::Association: return RenderEdgeKind::Association;
     case RelationKind::Nested: return RenderEdgeKind::Nested;
+    case RelationKind::AssociationLine: return RenderEdgeKind::AssociationLine;
+    case RelationKind::Square: return RenderEdgeKind::Square;
+    case RelationKind::Cross: return RenderEdgeKind::Cross;
+    case RelationKind::Crowfoot: return RenderEdgeKind::Crowfoot;
+    case RelationKind::Hat: return RenderEdgeKind::Hat;
     }
     return RenderEdgeKind::Association;
 }
@@ -851,11 +904,14 @@ RenderDocument GraphvizLayoutEngine::buildRenderDocument(
         }
 
         for (const auto &cluster : layoutGraph.clusters) {
+            if (cluster.id == defaultPackageId()) {
+                continue; // 过滤默认虚拟包，使其在 Qt 渲染端不画出背景大边框
+            }
             if (!layoutResult.clustersById.contains(cluster.id)) {
                 continue;
             }
             RenderPackage pkg;
-            pkg.id = cluster.id == defaultPackageId() ? "" : cluster.id;
+            pkg.id = cluster.id;
             pkg.displayName = cluster.label;
             pkg.color = cluster.color;
             pkg.rect = layoutResult.clustersById[cluster.id].rect.translated(offset);
@@ -891,6 +947,25 @@ RenderDocument GraphvizLayoutEngine::buildRenderDocument(
                 node.rect = layoutResult.nodesById[layoutNode.id].rect.translated(offset);
                 node.kind = RenderNodeKind::Note;
                 node.location = layoutNode.location;
+                doc.nodes.append(node);
+            }
+        }
+
+        // 装载虚拟占位点
+        for (const auto &layoutNode : layoutGraph.nodes) {
+            if (layoutNode.id.startsWith("assoc_point_")) {
+                if (!layoutResult.nodesById.contains(layoutNode.id)) {
+                    continue;
+                }
+                RenderNode node;
+                node.id = layoutNode.id;
+                node.displayName = "";
+                node.rect = layoutResult.nodesById[layoutNode.id].rect.translated(offset);
+                node.kind = RenderNodeKind::ClassBox;
+                node.metaType = "point";
+                node.location = layoutNode.location;
+                node.assocFromNodeId = layoutNode.attrs.value("assoc_from");
+                node.assocToNodeId = layoutNode.attrs.value("assoc_to");
                 doc.nodes.append(node);
             }
         }
@@ -1006,6 +1081,29 @@ QPointF GraphvizLayoutEngine::calculatePortPoint(
         return QPointF(targetX, targetY);
     }
 
+    // 3.1 特殊处理初始状态下的菱形和圆形吸附点
+    const ClassDecl *klass = findClassDecl(ast, nodeId);
+    if (klass && (klass->metaType == "diamond" || klass->metaType == "<>" ||
+                  klass->metaType == "circle" || klass->metaType == "()")) {
+        QPointF center(nodeRect.center().x(), nodeRect.center().y() - 10.0);
+        double radius = (klass->metaType == "diamond" || klass->metaType == "<>") ? 12.0 : 15.0;
+        
+        double targetX = center.x();
+        double targetY = center.y();
+        if (nodesById.contains(otherNodeId)) {
+            QRectF otherRect = nodesById[otherNodeId].rect.translated(offset);
+            QPointF otherCenter = otherRect.center();
+            double dx = otherCenter.x() - center.x();
+            double dy = otherCenter.y() - center.y();
+            if (qAbs(dx) >= qAbs(dy)) {
+                targetX = (dx >= 0.0) ? (center.x() + radius) : (center.x() - radius);
+            } else {
+                targetY = (dy >= 0.0) ? (center.y() + radius) : (center.y() - radius);
+            }
+        }
+        return QPointF(targetX, targetY);
+    }
+
     // 3. 如果是普通 Class 连线（没有指定 member_ 端口）：保持 Graphviz 的 Y 轴排布，强制规范 X 轴贴边
     if (portId.isEmpty() || !portId.startsWith("member_")) {
         double targetX = fallback.x();
@@ -1017,7 +1115,6 @@ QPointF GraphvizLayoutEngine::calculatePortPoint(
     }
 
     // 4. 如果是 Class 且指定了特定的成员端口：Y 轴对准成员文字中线，X 轴物理贴边
-    const ClassDecl *klass = findClassDecl(ast, nodeId);
     if (!klass) {
         return fallback;
     }

@@ -12,10 +12,10 @@ class GraphvizLayoutEngine
 {
 public:
     RenderDocument layout(const DiagramAst &ast, const RenderTheme &theme);
+    LayoutGraph buildClassGraph(const ClassDiagramAst &ast) const;
 
 private:
     LayoutGraph buildSequenceGraph(const SequenceDiagramAst &ast) const;
-    LayoutGraph buildClassGraph(const ClassDiagramAst &ast) const;
     RenderDocument buildRenderDocument(
         const DiagramAst &ast,
         const LayoutGraph &layoutGraph,

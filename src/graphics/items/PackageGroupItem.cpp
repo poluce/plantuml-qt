@@ -16,8 +16,13 @@ PackageGroupItem::PackageGroupItem(const RenderPackage &pkg, const RenderTheme &
     setFlag(QGraphicsItem::ItemIsMovable, true);
     setFlag(QGraphicsItem::ItemSendsGeometryChanges, true);
     
-    // 强制将模块包背景图元放置在最下层，确保类图元和连线在上方绘制
-    setZValue(-1.0);
+    // 基于层级深度动态分配 zValue
+    // 顶层包的深度为 0，zValue 为 -2.0
+    // 每往下一层，深度增加 1，zValue 增加 0.1
+    // 例如 A 的 zValue 为 -2.0，A.B 的 zValue 为 -1.9，A.B.C 的 zValue 为 -1.8，均低于类的 zValue (默认 >= 0)
+    int depth = pkg.id.count('.');
+    double z = qMin(-0.01, -2.0 + depth * 0.1);
+    setZValue(z);
     
     // 将物理绝对坐标转换到局部坐标绘制，设置 pos 为全局坐标，以支持拖动自适应
     setPos(pkg.rect.topLeft());

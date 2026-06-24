@@ -35,6 +35,7 @@ public:
 private:
     // 绘制旋转自适应的各类 UML 箭头和几何符号
     void drawRotatedArrow(QPainter *painter, const QPointF &tip, double rad, RenderEdgeKind kind);
+    void resolveStyle();
 
     RenderEdge m_edge;
     RenderTheme m_theme;
@@ -43,4 +44,9 @@ private:
 
     QPointF m_initialStart;
     QPointF m_initialEnd;
+    QVector<QPointF> m_initialPoints;
+
+    QColor m_resolvedColor;
+    double m_resolvedPenWidth;
+    Qt::PenStyle m_resolvedPenStyle;
 };

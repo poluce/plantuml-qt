@@ -56,13 +56,9 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
                 }
             }
             item = noteLine;
-        } else if (edge.kind == RenderEdgeKind::Inheritance || 
-            edge.kind == RenderEdgeKind::Association ||
-            edge.kind == RenderEdgeKind::Composition ||
-            edge.kind == RenderEdgeKind::Aggregation ||
-            edge.kind == RenderEdgeKind::Realization ||
-            edge.kind == RenderEdgeKind::Dependency ||
-            edge.kind == RenderEdgeKind::Nested) {
+        } else if (edge.kind != RenderEdgeKind::SyncCall && 
+            edge.kind != RenderEdgeKind::ReplyCall &&
+            edge.kind != RenderEdgeKind::NoteRelation) {
             auto *relItem = new RelationItem(edge, theme);
             
             QGraphicsItem *fromNode = scene->itemBySemanticId(edge.fromNodeId);
@@ -82,5 +78,21 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
         }
         
         scene->addItem(item);
+    }
+    
+    // 3. 关联虚拟节点的跟随比例和相对偏移初始化
+    for (const auto &node : doc.nodes) {
+        if (node.kind == RenderNodeKind::ClassBox && node.metaType == "point") {
+            QGraphicsItem *vItem = scene->itemBySemanticId(node.id);
+            if (auto *vBox = dynamic_cast<ClassBoxItem*>(vItem)) {
+                QGraphicsItem *fromItem = scene->itemBySemanticId(node.assocFromNodeId);
+                QGraphicsItem *toItem = scene->itemBySemanticId(node.assocToNodeId);
+                auto *fromBox = dynamic_cast<ClassBoxItem*>(fromItem);
+                auto *toBox = dynamic_cast<ClassBoxItem*>(toItem);
+                if (fromBox && toBox) {
+                    vBox->initAssociation(fromBox, toBox);
+                }
+            }
+        }
     }
 }
