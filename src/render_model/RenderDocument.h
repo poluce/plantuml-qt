@@ -40,7 +40,8 @@ enum class RenderEdgeKind
     Realization, // 类实现关系 (<|..)
     Dependency,  // 类依赖关系 (..>)
     Association, // 类关联关系 (-->)
-    NoteRelation // 新增：Note 专属指向虚指示线
+    NoteRelation, // 新增：Note 专属指向虚指示线
+    Nested       // 新增: 嵌套关系 (+--)
 };
 
 struct RenderEdge

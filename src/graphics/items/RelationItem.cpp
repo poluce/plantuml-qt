@@ -361,6 +361,9 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     } else if (m_edge.kind == RenderEdgeKind::Composition || m_edge.kind == RenderEdgeKind::Aggregation) {
         double diamondLen = m_theme.arrowSize * 1.5;
         startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * diamondLen;
+    } else if (m_edge.kind == RenderEdgeKind::Nested) {
+        double nestedLen = 12.0;
+        startPt = m_edge.startPoint + QPointF(qCos(startAngle), qSin(startAngle)) * nestedLen;
     }
     
     // 绘制连线线身
@@ -374,7 +377,8 @@ void RelationItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
     if (m_edge.kind == RenderEdgeKind::Inheritance || 
         m_edge.kind == RenderEdgeKind::Realization || 
         m_edge.kind == RenderEdgeKind::Composition || 
-        m_edge.kind == RenderEdgeKind::Aggregation) {
+        m_edge.kind == RenderEdgeKind::Aggregation ||
+        m_edge.kind == RenderEdgeKind::Nested) {
         // 源端（起点）绘制
         drawRotatedArrow(painter, m_edge.startPoint, startAngle, m_edge.kind);
     } else {
@@ -497,6 +501,21 @@ void RelationItem::drawRotatedArrow(QPainter *painter, const QPointF &tip, doubl
         
         painter->drawLine(QPointF(0, 0), p1);
         painter->drawLine(QPointF(0, 0), p2);
+    }
+    else if (kind == RenderEdgeKind::Nested) {
+        // 绘制嵌套关系特殊符号：直径大约为 12 像素的空心圆圈，加上正中心 '+' 符号
+        double radius = 6.0;
+        QRectF circleRect(0.0, -radius, radius * 2.0, radius * 2.0);
+        
+        // 空心圆圈，背景色填充
+        painter->setBrush(QBrush(m_theme.surfaceColor));
+        painter->drawEllipse(circleRect);
+        
+        // 绘制加号
+        // 水平线：从 (3, 0) 到 (9, 0)
+        painter->drawLine(QPointF(radius - 3.0, 0), QPointF(radius + 3.0, 0));
+        // 垂直线：从 (6, -3) 到 (6, 3)
+        painter->drawLine(QPointF(radius, -3.0), QPointF(radius, 3.0));
     }
     painter->restore();
 }

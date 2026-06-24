@@ -275,7 +275,43 @@ void ClassBoxItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
         painter->setPen(QPen(m_theme.borderColor, m_theme.lineWidth));
         painter->drawLine(QPointF(rect.x(), rect.y() + headerHeight), QPointF(rect.x() + rect.width(), rect.y() + headerHeight));
         
-        // 5. 绘制类名与元类/Stereotype修饰文本
+        // 5. 绘制圆形 Spot
+        double spotSize = 14.0;
+        QRectF spotRect(rect.x() + 8.0, rect.y() + (headerHeight - spotSize) / 2.0, spotSize, spotSize);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        
+        QColor spotBgColor;
+        QString spotText = "C";
+        
+        if (m_node.metaType.compare("interface", Qt::CaseInsensitive) == 0) {
+            spotBgColor = QColor(241, 196, 15); // 金色
+            spotText = "I";
+        } else if (m_node.metaType.compare("enum", Qt::CaseInsensitive) == 0) {
+            spotBgColor = QColor(46, 204, 113); // 绿色
+            spotText = "E";
+        } else if (m_node.metaType.compare("abstract", Qt::CaseInsensitive) == 0 ||
+                   m_node.metaType.compare("abstract class", Qt::CaseInsensitive) == 0) {
+            spotBgColor = QColor(230, 126, 34); // 橙色
+            spotText = "A";
+        } else {
+            spotBgColor = QColor(52, 152, 219); // 蓝色
+            spotText = "C";
+        }
+        
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(QBrush(spotBgColor));
+        painter->drawEllipse(spotRect);
+        
+        painter->setPen(Qt::white);
+        QFont spotFont = painter->font();
+        spotFont.setPointSize(8);
+        spotFont.setBold(true);
+        painter->setFont(spotFont);
+        painter->drawText(spotRect, Qt::AlignCenter, spotText);
+        painter->restore();
+        
+        // 6. 绘制类名与元类/Stereotype修饰文本
         painter->setPen(m_theme.onSurfaceColor);
         QFont font = painter->font();
         font.setPointSize(10);
@@ -299,17 +335,18 @@ void ClassBoxItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
             metaFont.setItalic(true);
             painter->setFont(metaFont);
             
-            QRectF metaRect(rect.x(), rect.y() + 3, rect.width(), 14);
+            QRectF metaRect(rect.x() + 24.0, rect.y() + 3, rect.width() - 32.0, 14);
             painter->drawText(metaRect, Qt::AlignCenter, topText);
             
             painter->setFont(font);
-            QRectF nameRect(rect.x(), rect.y() + 15, rect.width(), 18);
+            QRectF nameRect(rect.x() + 24.0, rect.y() + 15, rect.width() - 32.0, 18);
             painter->drawText(nameRect, Qt::AlignCenter, m_node.displayName.isEmpty() ? m_node.id : m_node.displayName);
         } else {
-            painter->drawText(headRect, Qt::AlignCenter, m_node.displayName.isEmpty() ? m_node.id : m_node.displayName);
+            QRectF headTextRect(rect.x() + 24.0, rect.y(), rect.width() - 32.0, headerHeight);
+            painter->drawText(headTextRect, Qt::AlignCenter, m_node.displayName.isEmpty() ? m_node.id : m_node.displayName);
         }
         
-        // 6. 依次换行左对齐绘制类成员 (属性与方法)
+        // 7. 依次换行左对齐绘制类成员 (属性与方法)
         font.setPointSize(9);
         font.setBold(false);
         painter->setFont(font);
@@ -349,8 +386,18 @@ void ClassBoxItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opti
                 }
                 painter->restore();
             } else {
+                painter->save();
+                QFont memberFont = painter->font();
+                if (member.isStatic) {
+                    memberFont.setUnderline(true);
+                }
+                if (member.isAbstract) {
+                    memberFont.setItalic(true);
+                }
+                painter->setFont(memberFont);
                 QRectF labelRect(rect.x() + 10.0, yOff, rect.width() - 20.0, memberLineHeight);
                 painter->drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, member.rawText);
+                painter->restore();
             }
         }
     }

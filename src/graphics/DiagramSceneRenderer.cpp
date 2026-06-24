@@ -61,7 +61,8 @@ void DiagramSceneRenderer::render(DiagramScene *scene, const RenderDocument &doc
             edge.kind == RenderEdgeKind::Composition ||
             edge.kind == RenderEdgeKind::Aggregation ||
             edge.kind == RenderEdgeKind::Realization ||
-            edge.kind == RenderEdgeKind::Dependency) {
+            edge.kind == RenderEdgeKind::Dependency ||
+            edge.kind == RenderEdgeKind::Nested) {
             auto *relItem = new RelationItem(edge, theme);
             
             QGraphicsItem *fromNode = scene->itemBySemanticId(edge.fromNodeId);

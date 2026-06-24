@@ -775,6 +775,7 @@ RenderEdgeKind GraphvizLayoutEngine::relationKindToRenderKind(RelationKind kind)
     case RelationKind::Realization: return RenderEdgeKind::Realization;
     case RelationKind::Dependency: return RenderEdgeKind::Dependency;
     case RelationKind::Association: return RenderEdgeKind::Association;
+    case RelationKind::Nested: return RenderEdgeKind::Nested;
     }
     return RenderEdgeKind::Association;
 }
@@ -786,7 +787,13 @@ QPainterPath GraphvizLayoutEngine::pathFromPoints(const QVector<QPointF> &points
         return path;
     }
     path.moveTo(points.first());
-    for (int i = 1; i < points.size(); ++i) {
+    // Graphviz 输出的点序列为三次 B-Spline 控制点：p0 为起点，之后每 3 个点一组用 cubicTo 绘制
+    int i = 1;
+    for (; i + 2 < points.size(); i += 3) {
+        path.cubicTo(points[i], points[i + 1], points[i + 2]);
+    }
+    // 末尾不足 3 个的剩余点用 lineTo 兜底
+    for (; i < points.size(); ++i) {
         path.lineTo(points[i]);
     }
     return path;

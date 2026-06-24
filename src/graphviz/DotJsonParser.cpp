@@ -29,9 +29,10 @@ QPointF DotJsonParser::parsePoint(const QString &value, double graphHeight) cons
 QVector<QPointF> DotJsonParser::parseEdgePoints(const QString &value, double graphHeight) const
 {
     QVector<QPointF> points;
-    for (QString token : value.split(' ', Qt::SkipEmptyParts)) {
+    for (const QString &token : value.split(' ', Qt::SkipEmptyParts)) {
+        // e, 和 s, 是箭头端点标记，不属于 B-Spline 控制点序列，必须跳过
         if (token.startsWith("e,") || token.startsWith("s,")) {
-            token = token.mid(2);
+            continue;
         }
         if (!token.contains(',')) {
             continue;
